@@ -23,7 +23,7 @@ COL_MAP = {
     "总量库存": "总量库存", "8-30天": "需求_8_30天", "15天": "需求_15天", "30天": "需求_30天",
     "采用需求": "日均需求", "需求来源": "需求来源", "LT预估": "LT预估", "物流预估": "物流预估",
     "决策建议": "决策建议", "建议订货量": "建议订货量", "体积系数": "PriceRadarVolume",
-    "备货体积": "备货体积", "详细说明": "详细说明"
+    "备货体积": "备货体积", "催发货体积": "催发货体积", "详细说明": "详细说明"
 }
 SORT_OPTIONS = ["（无）"] + list(COL_MAP.keys())
 
@@ -42,8 +42,9 @@ class InventoryDecisionSystem:
     def __init__(self, root):
         self.root = root
         self.root.title("智能库存决策系统 V4.8")
-        self.root.geometry("1580x920")
+        self.root.geometry("1620x920")
         self.root.minsize(1200, 720)
+        self.root.configure(bg="#FFFFFF")
 
         base_dir = get_base_dir()
         self.default_data_dir = os.path.join(base_dir, "data")
@@ -127,23 +128,26 @@ class InventoryDecisionSystem:
     def setup_styles(self):
         style = ttk.Style()
         style.theme_use("clam")
-        style.configure("Card.TLabelframe", padding=10)
+        style.configure("Card.TLabelframe", padding=12, background="#FFFFFF", relief="flat", borderwidth=1)
+        style.configure("Card.TLabelframe.Label", background="#FFFFFF", foreground="#1E3A5F", font=UI_FONT_BOLD)
         style.configure("Modern.Treeview",
                         background="#FFFFFF",
                         foreground="#1F2937",
                         fieldbackground="#FFFFFF",
-                        rowheight=28,
+                        rowheight=30,
+                        borderwidth=0,
                         font=UI_FONT)
         style.configure("Modern.Treeview.Heading",
-                        background="#E8EEF7",
+                        background="#F1F5F9",
                         foreground="#1E3A5F",
                         font=UI_FONT_BOLD,
-                        relief="flat")
+                        relief="flat",
+                        borderwidth=0)
         style.map("Modern.Treeview",
-                  background=[("selected", "#D6E4FF")],
+                  background=[("selected", "#DBEAFE")],
                   foreground=[("selected", "#0F172A")])
         style.map("Modern.Treeview.Heading",
-                  background=[("active", "#D6E4FF")])
+                  background=[("active", "#E2E8F0")])
 
     def _bind_shortcuts(self):
         for key in ("<KeyPress-Shift_L>", "<KeyPress-Shift_R>"):
@@ -152,8 +156,16 @@ class InventoryDecisionSystem:
             self.root.bind(key, lambda e: setattr(self, "shift_pressed", False))
 
     def _section(self, parent, title):
-        frame = ttk.LabelFrame(parent, text=title, style="Card.TLabelframe")
-        frame.pack(fill="x", padx=16, pady=(0, 10))
+        outer = tk.Frame(parent, bg="#FFFFFF", highlightbackground="#E2E8F0", highlightthickness=1)
+        outer.pack(fill="x", padx=16, pady=(0, 10))
+        tk.Label(outer, text=title, font=UI_FONT_BOLD, bg="#FFFFFF", fg="#1E3A5F").pack(
+            anchor="w", padx=12, pady=(10, 4))
+        body = tk.Frame(outer, bg="#FFFFFF")
+        body.pack(fill="x", padx=12, pady=(0, 12))
+        return body
+
+    def _frame(self, parent):
+        frame = tk.Frame(parent, bg="#FFFFFF")
         return frame
 
     def _set_combo_values(self, combo, values):
@@ -163,78 +175,78 @@ class InventoryDecisionSystem:
         label.configure(text=text, fg=color)
 
     def setup_ui(self):
-        header = tk.Frame(self.root, bg="#F8FAFC")
+        header = tk.Frame(self.root, bg="#FFFFFF")
         header.pack(fill="x", padx=16, pady=(12, 6))
         tk.Label(header, text="智能库存决策系统", font=UI_TITLE_FONT,
-                 bg="#F8FAFC", fg="#0F172A").pack(anchor="w")
+                 bg="#FFFFFF", fg="#0F172A").pack(anchor="w")
         tk.Label(header, text="库存决策分析 · 订柜体积监控 · 多维筛选与排序",
-                 font=UI_FONT, bg="#F8FAFC", fg="#64748B").pack(anchor="w", pady=(2, 0))
+                 font=UI_FONT, bg="#FFFFFF", fg="#64748B").pack(anchor="w", pady=(2, 0))
 
         dir_body = self._section(self.root, "数据源配置")
-        dir_row = tk.Frame(dir_body)
+        dir_row = self._frame(dir_body)
         dir_row.pack(fill="x")
-        tk.Label(dir_row, text="数据根目录", font=UI_FONT).grid(row=0, column=0, sticky="w", padx=(0, 8))
+        tk.Label(dir_row, text="数据根目录", font=UI_FONT, bg="#FFFFFF").grid(row=0, column=0, sticky="w", padx=(0, 8))
         self.dir_entry = ttk.Entry(dir_row, textvariable=self.data_dir, width=52)
         self.dir_entry.grid(row=0, column=1, padx=(0, 8))
         ttk.Button(dir_row, text="浏览", command=self.select_data_dir).grid(row=0, column=2, padx=(0, 16))
-        tk.Label(dir_row, text="渠道", font=UI_FONT).grid(row=0, column=3, sticky="w", padx=(0, 8))
+        tk.Label(dir_row, text="渠道", font=UI_FONT, bg="#FFFFFF").grid(row=0, column=3, sticky="w", padx=(0, 8))
         self.channel_combo = ttk.Combobox(dir_row, textvariable=self.channel, width=18, state="readonly")
         self.channel_combo.grid(row=0, column=4, padx=(0, 8))
         self.channel_combo.bind("<<ComboboxSelected>>", lambda _e: self.update_file_status())
         ttk.Button(dir_row, text="刷新渠道", command=lambda: self.refresh_channels()).grid(row=0, column=5)
 
         self.file_status_label = tk.Label(dir_body, text="请选择数据根目录并刷新渠道列表",
-                                        font=UI_FONT, fg="#64748B", anchor="w")
+                                        font=UI_FONT, fg="#64748B", bg="#FFFFFF", anchor="w")
         self.file_status_label.pack(fill="x", pady=(8, 0))
 
         auto_body = self._section(self.root, "自动扫描")
-        auto_row = tk.Frame(auto_body)
+        auto_row = self._frame(auto_body)
         auto_row.pack(fill="x")
-        tk.Label(auto_row, text="间隔(分钟)", font=UI_FONT).pack(side="left")
+        tk.Label(auto_row, text="间隔(分钟)", font=UI_FONT, bg="#FFFFFF").pack(side="left")
         self.interval_entry = ttk.Entry(auto_row, width=8)
         self.interval_entry.insert(0, str(self.auto_scan_interval))
         self.interval_entry.pack(side="left", padx=(8, 12))
         self.auto_btn = tk.Button(auto_row, text="开始自动扫描", width=12, font=UI_FONT_BOLD,
                                   bg="#16A34A", fg="white", relief="flat", command=self.toggle_auto_scan)
         self.auto_btn.pack(side="left", padx=(0, 12))
-        self.auto_status = tk.Label(auto_row, text="状态：已停止", font=UI_FONT, fg="#64748B")
+        self.auto_status = tk.Label(auto_row, text="状态：已停止", font=UI_FONT, fg="#64748B", bg="#FFFFFF")
         self.auto_status.pack(side="left")
         tk.Label(auto_body, text=f"归档目录：{self.default_output_dir}",
-                font=UI_MONO_FONT, fg="#94A3B8", anchor="w").pack(fill="x", pady=(8, 0))
+                font=UI_MONO_FONT, fg="#94A3B8", bg="#FFFFFF", anchor="w").pack(fill="x", pady=(8, 0))
 
         param_body = self._section(self.root, "时间参数（天）")
-        param_row = tk.Frame(param_body)
+        param_row = self._frame(param_body)
         param_row.pack(fill="x")
-        tk.Label(param_row, text="Lead Time", font=UI_FONT).pack(side="left")
+        tk.Label(param_row, text="Lead Time", font=UI_FONT, bg="#FFFFFF").pack(side="left")
         self.lead_time = ttk.Entry(param_row, width=10)
         self.lead_time.insert(0, "90")
         self.lead_time.pack(side="left", padx=(8, 24))
-        tk.Label(param_row, text="物流时间", font=UI_FONT).pack(side="left")
+        tk.Label(param_row, text="物流时间", font=UI_FONT, bg="#FFFFFF").pack(side="left")
         self.logistics_time = ttk.Entry(param_row, width=10)
         self.logistics_time.insert(0, "30")
         self.logistics_time.pack(side="left", padx=8)
 
         self.help_visible = tk.BooleanVar(value=False)
-        help_toggle_frame = tk.Frame(self.root)
+        help_toggle_frame = self._frame(self.root)
         help_toggle_frame.pack(fill="x", padx=16, pady=(0, 4))
         self.help_toggle_btn = tk.Button(help_toggle_frame, text="展开说明", font=UI_FONT,
-                                        fg="#2563EB", bg="#F8FAFC", relief="flat",
+                                        fg="#2563EB", bg="#FFFFFF", relief="flat",
                                         command=self.toggle_help)
         self.help_toggle_btn.pack(anchor="w")
 
-        self.help_frame = ttk.LabelFrame(self.root, text="使用说明", padding=10)
+        self.help_frame = tk.Frame(self.root, bg="#FFFFFF", highlightbackground="#E2E8F0", highlightthickness=1)
         help_text = (
             "数据源：各渠道文件夹需含 stock.csv / PO.csv / Sales 8-30.csv / Sales 15.csv / Sales 30.csv\n"
-            "决策逻辑：取三档销售最大日均需求；仅「下单备货」计入备货体积；南北岛各自 ≥69m³ 可订柜\n"
+            "决策逻辑：取三档销售最大日均需求；「下单备货」计入备货体积，「催促发货」计入催发货体积（在途×体积系数）\n"
             "筛选：地区 / 决策 / Family 可组合，体积面板会随当前视图实时更新\n"
             "排序：使用下方排序栏设置主/次排序，或点击表头（Shift+点击设次排序）"
         )
         self.help_label = tk.Label(self.help_frame, text=help_text, justify="left",
-                                   font=UI_FONT, fg="#475569")
+                                   font=UI_FONT, fg="#475569", bg="#FFFFFF")
         self.help_label.pack(anchor="w")
 
         action_body = self._section(self.root, "分析与导出")
-        action_row = tk.Frame(action_body)
+        action_row = self._frame(action_body)
         action_row.pack(fill="x")
         tk.Button(action_row, text="生成分析报告", width=14, height=1, font=UI_FONT_BOLD,
                   bg="#16A34A", fg="white", relief="flat",
@@ -244,23 +256,23 @@ class InventoryDecisionSystem:
                   command=self.export_excel).pack(side="left")
 
         filter_body = self._section(self.root, "筛选与排序")
-        filter_row = tk.Frame(filter_body)
+        filter_row = self._frame(filter_body)
         filter_row.pack(fill="x", pady=(0, 8))
 
-        tk.Label(filter_row, text="地区", font=UI_FONT).grid(row=0, column=0, sticky="w", padx=(0, 6))
+        tk.Label(filter_row, text="地区", font=UI_FONT, bg="#FFFFFF").grid(row=0, column=0, sticky="w", padx=(0, 6))
         self.region_combo = ttk.Combobox(filter_row, textvariable=self.filter_region, width=10,
                                          values=["全部", "北岛", "南岛"], state="readonly")
         self.region_combo.grid(row=0, column=1, padx=(0, 16))
         self.region_combo.bind("<<ComboboxSelected>>", lambda _e: self.refresh_display())
 
-        tk.Label(filter_row, text="决策", font=UI_FONT).grid(row=0, column=2, sticky="w", padx=(0, 6))
+        tk.Label(filter_row, text="决策", font=UI_FONT, bg="#FFFFFF").grid(row=0, column=2, sticky="w", padx=(0, 6))
         self.decision_combo = ttk.Combobox(
             filter_row, textvariable=self.filter_decision, width=12,
             values=["全部", "下单备货", "催促发货", "保持现状", "暂无销售"], state="readonly")
         self.decision_combo.grid(row=0, column=3, padx=(0, 16))
         self.decision_combo.bind("<<ComboboxSelected>>", lambda _e: self.refresh_display())
 
-        tk.Label(filter_row, text="Family（可搜索）", font=UI_FONT).grid(row=0, column=4, sticky="w", padx=(0, 6))
+        tk.Label(filter_row, text="Family（可搜索）", font=UI_FONT, bg="#FFFFFF").grid(row=0, column=4, sticky="w", padx=(0, 6))
         self.family_combo = ttk.Combobox(filter_row, textvariable=self.filter_family, width=22,
                                          values=self.family_list)
         self.family_combo.grid(row=0, column=5, padx=(0, 16))
@@ -271,9 +283,9 @@ class InventoryDecisionSystem:
         tk.Button(filter_row, text="重置", width=8, font=UI_FONT, bg="#64748B", fg="white",
                   relief="flat", command=self.reset_filters).grid(row=0, column=6)
 
-        sort_row = tk.Frame(filter_body)
+        sort_row = self._frame(filter_body)
         sort_row.pack(fill="x")
-        tk.Label(sort_row, text="主排序", font=UI_FONT).pack(side="left")
+        tk.Label(sort_row, text="主排序", font=UI_FONT, bg="#FFFFFF").pack(side="left")
         self.sort_primary_combo = ttk.Combobox(sort_row, textvariable=self.sort_primary_var, width=14,
                                                values=SORT_OPTIONS, state="readonly")
         self.sort_primary_combo.pack(side="left", padx=(6, 4))
@@ -283,7 +295,7 @@ class InventoryDecisionSystem:
                                               command=self.toggle_primary_sort_dir)
         self.sort_primary_dir_btn.pack(side="left", padx=(0, 16))
 
-        tk.Label(sort_row, text="次排序", font=UI_FONT).pack(side="left")
+        tk.Label(sort_row, text="次排序", font=UI_FONT, bg="#FFFFFF").pack(side="left")
         self.sort_secondary_combo = ttk.Combobox(sort_row, textvariable=self.sort_secondary_var, width=14,
                                                  values=SORT_OPTIONS, state="readonly")
         self.sort_secondary_combo.pack(side="left", padx=(6, 4))
@@ -295,31 +307,33 @@ class InventoryDecisionSystem:
         tk.Button(sort_row, text="清除次排序", width=10, font=UI_FONT, bg="#94A3B8", fg="white",
                   relief="flat", command=self.clear_secondary_sort).pack(side="left", padx=(0, 12))
 
-        self.sort_status_label = tk.Label(sort_row, text="排序：默认（决策优先级）", font=UI_FONT, fg="#64748B")
+        self.sort_status_label = tk.Label(sort_row, text="排序：默认（决策优先级）", font=UI_FONT, fg="#64748B", bg="#FFFFFF")
         self.sort_status_label.pack(side="left")
 
         container_body = self._section(self.root, f"订柜状态监控（阈值 {CONTAINER_THRESHOLD:.0f} m³/柜）")
         self.container_status_label = tk.Label(container_body, text="等待分析...",
-                                               font=("Microsoft YaHei UI", 11), fg="#64748B", justify="left", anchor="w")
+                                               font=("Microsoft YaHei UI", 11), fg="#64748B",
+                                               justify="left", anchor="w", bg="#FFFFFF")
         self.container_status_label.pack(fill="x")
         self.volume_detail_label = tk.Label(container_body, text="", font=UI_FONT,
-                                            fg="#475569", justify="left", anchor="w")
+                                            fg="#475569", justify="left", anchor="w", bg="#FFFFFF")
         self.volume_detail_label.pack(fill="x", pady=(6, 0))
 
-        table_section = ttk.LabelFrame(self.root, text="分析结果（点击表头排序，Shift+点击设次排序）",
-                                       style="Card.TLabelframe")
+        table_section = tk.Frame(self.root, bg="#FFFFFF", highlightbackground="#E2E8F0", highlightthickness=1)
         table_section.pack(fill="both", expand=True, padx=16, pady=(0, 10))
+        tk.Label(table_section, text="分析结果（点击表头排序，Shift+点击设次排序）",
+                 font=UI_FONT_BOLD, bg="#FFFFFF", fg="#1E3A5F").pack(anchor="w", padx=12, pady=(10, 6))
 
-        table_wrap = tk.Frame(table_section, bg="#F8FAFC")
-        table_wrap.pack(fill="both", expand=True, padx=4, pady=4)
+        table_wrap = tk.Frame(table_section, bg="#FFFFFF")
+        table_wrap.pack(fill="both", expand=True, padx=8, pady=(0, 8))
 
         columns = ("SKU", "Name", "ProductFamily", "地区", "在库库存", "在途库存", "总量库存",
                    "8-30天", "15天", "30天", "采用需求", "需求来源",
-                   "LT预估", "物流预估", "决策建议", "建议订货量", "体积系数", "备货体积", "详细说明")
+                   "LT预估", "物流预估", "决策建议", "建议订货量", "体积系数", "备货体积", "催发货体积", "详细说明")
         self.tree = ttk.Treeview(table_wrap, columns=columns, show="headings", height=14, style="Modern.Treeview")
         self.column_display_names = columns
 
-        col_widths = [80, 180, 100, 60, 70, 70, 70, 65, 65, 65, 75, 85, 80, 80, 90, 80, 75, 80, 180]
+        col_widths = [80, 160, 90, 55, 65, 65, 65, 60, 60, 60, 70, 80, 75, 75, 85, 75, 70, 75, 80, 160]
         for col, width in zip(columns, col_widths):
             self.tree.heading(col, text=col, command=lambda c=col: self.on_header_click(c))
             self.tree.column(col, width=width, anchor="center")
@@ -333,16 +347,14 @@ class InventoryDecisionSystem:
         table_wrap.grid_rowconfigure(0, weight=1)
         table_wrap.grid_columnconfigure(0, weight=1)
 
-        self.tree.tag_configure("use_8_30", background="#F3E8FF", foreground="#6B21A8")
-        self.tree.tag_configure("use_15", background="#DCFCE7", foreground="#166534")
-        self.tree.tag_configure("use_30", background="#DBEAFE", foreground="#1D4ED8")
-        self.tree.tag_configure("urgent", background="#FEE2E2", foreground="#991B1B")
-        self.tree.tag_configure("warning", background="#FEF3C7", foreground="#B45309")
-        self.tree.tag_configure("no_sales", background="#F8FAFC", foreground="#94A3B8")
+        self.tree.tag_configure("normal", background="#FFFFFF", foreground="#1F2937")
+        self.tree.tag_configure("urgent", background="#FFFFFF", foreground="#B91C1C")
+        self.tree.tag_configure("warning", background="#FFFFFF", foreground="#B45309")
+        self.tree.tag_configure("no_sales", background="#FFFFFF", foreground="#9CA3AF")
 
         summary_body = self._section(self.root, "汇总统计")
         self.summary_label = tk.Label(summary_body, text="等待分析...", font=UI_MONO_FONT,
-                                      justify="left", anchor="w")
+                                      justify="left", anchor="w", bg="#FFFFFF")
         self.summary_label.pack(fill="x")
 
     def toggle_help(self):
@@ -548,29 +560,53 @@ class InventoryDecisionSystem:
 
     def update_volume_displays(self, df):
         order_df = df[df['决策建议'] == '下单备货']
-        north_volume = order_df[order_df['Region'] == '北岛']['备货体积'].sum()
-        south_volume = order_df[order_df['Region'] == '南岛']['备货体积'].sum()
-        total_volume = order_df['备货体积'].sum()
+        expedite_df = df[df['决策建议'] == '催促发货']
+
+        north_order = order_df[order_df['Region'] == '北岛']['备货体积'].sum()
+        south_order = order_df[order_df['Region'] == '南岛']['备货体积'].sum()
+        total_order = order_df['备货体积'].sum()
+
+        north_expedite = expedite_df[expedite_df['Region'] == '北岛']['催发货体积'].sum()
+        south_expedite = expedite_df[expedite_df['Region'] == '南岛']['催发货体积'].sum()
+        total_expedite = expedite_df['催发货体积'].sum()
+
         threshold = CONTAINER_THRESHOLD
-
-        north_can = north_volume >= threshold
-        south_can = south_volume >= threshold
+        north_can = north_order >= threshold
+        south_can = south_order >= threshold
         view_note = "（当前筛选视图）" if self._filters_active() else "（全量数据）"
-
-        msgs = []
-        if north_can:
-            msgs.append(f"北岛可订柜：{north_volume:.2f} m³ ≥ {threshold:.0f} m³")
-        else:
-            msgs.append(f"北岛：{north_volume:.2f} m³（差 {threshold - north_volume:.2f} m³）")
-        if south_can:
-            msgs.append(f"南岛可订柜：{south_volume:.2f} m³ ≥ {threshold:.0f} m³")
-        else:
-            msgs.append(f"南岛：{south_volume:.2f} m³（差 {threshold - south_volume:.2f} m³）")
-
         channel = self.channel.get() or "—"
-        self._set_label(self.container_status_label,
-                        f"[{channel}] {view_note}  " + "  |  ".join(msgs),
-                        "#DC2626" if (north_can or south_can) else "#334155")
+        decision_filter = self.filter_decision.get()
+
+        if decision_filter == "催促发货":
+            status_text = (f"[{channel}] {view_note}  "
+                           f"催发货体积：北岛 {north_expedite:.3f} m³ / 南岛 {south_expedite:.3f} m³ / 合计 {total_expedite:.3f} m³")
+            status_color = "#B45309" if total_expedite > 0 else "#334155"
+        elif decision_filter == "下单备货":
+            msgs = []
+            if north_can:
+                msgs.append(f"北岛可订柜：{north_order:.2f} m³ ≥ {threshold:.0f} m³")
+            else:
+                msgs.append(f"北岛备货：{north_order:.2f} m³（差 {threshold - north_order:.2f} m³）")
+            if south_can:
+                msgs.append(f"南岛可订柜：{south_order:.2f} m³ ≥ {threshold:.0f} m³")
+            else:
+                msgs.append(f"南岛备货：{south_order:.2f} m³（差 {threshold - south_order:.2f} m³）")
+            status_text = f"[{channel}] {view_note}  " + "  |  ".join(msgs)
+            status_color = "#DC2626" if (north_can or south_can) else "#334155"
+        else:
+            msgs = []
+            if north_can:
+                msgs.append(f"北岛可订柜：{north_order:.2f} m³")
+            else:
+                msgs.append(f"北岛备货：{north_order:.2f} m³")
+            if south_can:
+                msgs.append(f"南岛可订柜：{south_order:.2f} m³")
+            else:
+                msgs.append(f"南岛备货：{south_order:.2f} m³")
+            status_text = f"[{channel}] {view_note}  " + "  |  ".join(msgs)
+            status_color = "#DC2626" if (north_can or south_can) else "#334155"
+
+        self._set_label(self.container_status_label, status_text, status_color)
 
         decision_stats = []
         for decision in ["下单备货", "催促发货", "保持现状", "暂无销售"]:
@@ -579,16 +615,17 @@ class InventoryDecisionSystem:
                 continue
             if decision == "下单备货":
                 vol = subset['备货体积'].sum()
-                decision_stats.append(f"{decision} {len(subset)} 行 / 体积 {vol:.3f} m³")
+                decision_stats.append(f"{decision} {len(subset)} 行 / 备货 {vol:.3f} m³")
             elif decision == "催促发货":
+                vol = subset['催发货体积'].sum()
                 transit = subset['在途库存'].sum()
-                decision_stats.append(f"{decision} {len(subset)} 行 / 在途 {transit:.0f} 件")
+                decision_stats.append(f"{decision} {len(subset)} 行 / 在途 {transit:.0f} 件 / 催发 {vol:.3f} m³")
             else:
                 decision_stats.append(f"{decision} {len(subset)} 行")
 
-        self._set_label(self.volume_detail_label,
-                        "各决策状态：" + "  |  ".join(decision_stats) + f"  |  合计备货体积：{total_volume:.3f} m³",
-                        "#475569")
+        detail = "各决策状态：" + "  |  ".join(decision_stats)
+        detail += f"  |  备货合计 {total_order:.3f} m³  |  催发合计 {total_expedite:.3f} m³"
+        self._set_label(self.volume_detail_label, detail, "#475569")
 
     def refresh_display(self):
         if self.result_data is None:
@@ -625,30 +662,35 @@ class InventoryDecisionSystem:
                 f"{row['建议订货量']:.0f}" if row['建议订货量'] > 0 else "-",
                 f"{row['PriceRadarVolume']:.5f}",
                 f"{row['备货体积']:.4f}" if row['备货体积'] > 0 else "-",
+                f"{row['催发货体积']:.4f}" if row['催发货体积'] > 0 else "-",
                 row['详细说明']
             )
-            tags = []
-            if row['来源标签'] != "no_sales":
-                tags.append(row['来源标签'])
             if row['决策建议'] == "下单备货":
-                tags.append("urgent")
-            elif row['决策建议'] == '催促发货':
-                tags.append("warning")
-            elif row['决策建议'] == '暂无销售':
-                tags.append("no_sales")
-            self.tree.insert("", "end", values=values, tags=tuple(tags) if tags else ())
+                tags = ("urgent",)
+            elif row['决策建议'] == "催促发货":
+                tags = ("warning",)
+            elif row['决策建议'] == "暂无销售":
+                tags = ("no_sales",)
+            else:
+                tags = ("normal",)
+            self.tree.insert("", "end", values=values, tags=tags)
 
         self.update_volume_displays(df)
 
         order_df = df[df['决策建议'] == '下单备货']
-        total_vol = order_df['备货体积'].sum()
-        north_vol = order_df[order_df['Region'] == '北岛']['备货体积'].sum()
-        south_vol = order_df[order_df['Region'] == '南岛']['备货体积'].sum()
+        expedite_df = df[df['决策建议'] == '催促发货']
+        total_order = order_df['备货体积'].sum()
+        north_order = order_df[order_df['Region'] == '北岛']['备货体积'].sum()
+        south_order = order_df[order_df['Region'] == '南岛']['备货体积'].sum()
+        total_expedite = expedite_df['催发货体积'].sum()
+        north_expedite = expedite_df[expedite_df['Region'] == '北岛']['催发货体积'].sum()
+        south_expedite = expedite_df[expedite_df['Region'] == '南岛']['催发货体积'].sum()
         filter_hint = "（筛选视图）" if self._filters_active() else ""
         self._set_label(self.summary_label,
                         (f"当前显示：{len(df)} 行{filter_hint}  |  "
-                         f"需下单：{len(order_df)}  |  "
-                         f"备货体积：北岛 {north_vol:.3f} m³ / 南岛 {south_vol:.3f} m³ / 合计 {total_vol:.3f} m³"))
+                         f"需下单：{len(order_df)}  |  需催发：{len(expedite_df)}  |  "
+                         f"备货体积：北岛 {north_order:.3f} / 南岛 {south_order:.3f} / 合计 {total_order:.3f} m³  |  "
+                         f"催发体积：北岛 {north_expedite:.3f} / 南岛 {south_expedite:.3f} / 合计 {total_expedite:.3f} m³"))
 
     # ========== 自动扫描（轮询所有渠道） ==========
     def toggle_auto_scan(self):
@@ -1007,8 +1049,10 @@ class InventoryDecisionSystem:
                            f"总库存{total:.0f}≤{lt_days}天需求({lt_need:.1f})，缺口{order_qty:.0f}，体积{order_vol:.4f}m³，基于{source}")
                 elif in_stock <= log_need:
                     days = in_stock / daily
+                    expedite_vol = transit * price_vol
                     return ("催促发货", 0, 0,
-                           f"现货{in_stock:.0f}≤{log_days}天需求({log_need:.1f})，仅够{days:.0f}天，需催{transit:.0f}件到港")
+                           f"现货{in_stock:.0f}≤{log_days}天需求({log_need:.1f})，仅够{days:.0f}天，"
+                           f"需催{transit:.0f}件到港，催发货体积{expedite_vol:.4f}m³")
                 else:
                     days = total / daily
                     return ("保持现状", 0, 0,
@@ -1019,6 +1063,11 @@ class InventoryDecisionSystem:
             df['建议订货量'] = [d[1] for d in decisions]
             df['备货体积'] = [d[2] for d in decisions]
             df['详细说明'] = [d[3] for d in decisions]
+            df['催发货体积'] = 0.0
+            expedite_mask = df['决策建议'] == '催促发货'
+            df.loc[expedite_mask, '催发货体积'] = (
+                df.loc[expedite_mask, '在途库存'] * df.loc[expedite_mask, 'PriceRadarVolume']
+            )
 
             priority = {"下单备货": 0, "催促发货": 1, "保持现状": 2, "暂无销售": 3}
             df['优先级'] = df['决策建议'].map(priority)
@@ -1124,20 +1173,24 @@ class InventoryDecisionSystem:
             return False
         cols = ['Sku', 'Name', 'ProductFamily', 'Region', '在库库存', '在途库存', '总量库存', 
                '需求_8_30天', '需求_15天', '需求_30天', '日均需求', '需求来源',
-               'LT预估', '物流预估', '决策建议', '建议订货量', 'PriceRadarVolume', '备货体积', '详细说明']
+               'LT预估', '物流预估', '决策建议', '建议订货量', 'PriceRadarVolume', '备货体积', '催发货体积', '详细说明']
 
         export_df = data[cols].copy()
         export_df.columns = ['SKU', 'Name', 'ProductFamily', '地区', '在库库存', '在途库存', '总量库存',
                            '8-30天日均', '15天日均', '30天日均', '采用日均需求', '需求来源',
-                           'LeadTime周期需求', '物流周期需求', '决策建议', '建议订货量', '体积系数', '备货体积(m³)', '详细说明']
+                           'LeadTime周期需求', '物流周期需求', '决策建议', '建议订货量', '体积系数',
+                           '备货体积(m³)', '催发货体积(m³)', '详细说明']
 
         with pd.ExcelWriter(filename, engine='openpyxl') as writer:
             export_df.to_excel(writer, index=False, sheet_name='库存决策分析')
             ws = writer.sheets['库存决策分析']
 
             order_df = data[data['决策建议'] == '下单备货']
+            expedite_df = data[data['决策建议'] == '催促发货']
             n_vol = order_df[order_df['Region'] == '北岛']['备货体积'].sum()
             s_vol = order_df[order_df['Region'] == '南岛']['备货体积'].sum()
+            n_exp = expedite_df[expedite_df['Region'] == '北岛']['催发货体积'].sum()
+            s_exp = expedite_df[expedite_df['Region'] == '南岛']['催发货体积'].sum()
 
             r = len(export_df) + 2
             ws.cell(row=r, column=1, value="=== 汇总统计 ===")
@@ -1147,8 +1200,14 @@ class InventoryDecisionSystem:
             ws.cell(row=r+2, column=2, value=n_vol)
             ws.cell(row=r+3, column=1, value="南岛备货体积(m³):")
             ws.cell(row=r+3, column=2, value=s_vol)
-            ws.cell(row=r+4, column=1, value="订柜状态:")
-            ws.cell(row=r+4, column=2, value=f"北岛:{'可订柜' if n_vol>=CONTAINER_THRESHOLD else '未满柜'}, 南岛:{'可订柜' if s_vol>=CONTAINER_THRESHOLD else '未满柜'}")
+            ws.cell(row=r+4, column=1, value="总催发货体积(m³):")
+            ws.cell(row=r+4, column=2, value=expedite_df['催发货体积'].sum())
+            ws.cell(row=r+5, column=1, value="北岛催发货体积(m³):")
+            ws.cell(row=r+5, column=2, value=n_exp)
+            ws.cell(row=r+6, column=1, value="南岛催发货体积(m³):")
+            ws.cell(row=r+6, column=2, value=s_exp)
+            ws.cell(row=r+7, column=1, value="订柜状态:")
+            ws.cell(row=r+7, column=2, value=f"北岛:{'可订柜' if n_vol>=CONTAINER_THRESHOLD else '未满柜'}, 南岛:{'可订柜' if s_vol>=CONTAINER_THRESHOLD else '未满柜'}")
         return True
 
     def export_excel(self):
@@ -1172,7 +1231,7 @@ class InventoryDecisionSystem:
 def main():
     try:
         root = tk.Tk()
-        root.configure(bg="#F8FAFC")
+        root.configure(bg="#FFFFFF")
         app = InventoryDecisionSystem(root)
         root.mainloop()
     except Exception as e:
