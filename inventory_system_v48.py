@@ -33,10 +33,22 @@ def get_base_dir():
     else:
         return os.path.dirname(os.path.abspath(__file__))
 
-UI_FONT = ("Microsoft YaHei UI", 10)
-UI_FONT_BOLD = ("Microsoft YaHei UI", 10, "bold")
-UI_TITLE_FONT = ("Microsoft YaHei UI", 18, "bold")
-UI_MONO_FONT = ("Consolas", 10)
+UI_FONT = ("Microsoft YaHei UI", 9)
+UI_FONT_BOLD = ("Microsoft YaHei UI", 9, "bold")
+UI_TITLE_FONT = ("Microsoft YaHei UI", 14, "bold")
+UI_MONO_FONT = ("Consolas", 9)
+
+ERP_PAGE_BG = "#F0F4F8"
+ERP_HEADER_BG = "#3B7DD8"
+ERP_PANEL_BG = "#FFFFFF"
+ERP_BORDER = "#C8D4E3"
+ERP_BTN_BLUE = "#337AB7"
+ERP_BTN_GREEN = "#5CB85C"
+ERP_BTN_GREY = "#6C757D"
+ERP_TEXT = "#2C3E50"
+ERP_MUTED = "#6C757D"
+ERP_TABLE_HEAD = "#E8EEF5"
+ERP_STATUS_BG = "#FFF8E6"
 
 class InventoryDecisionSystem:
     def __init__(self, root):
@@ -44,7 +56,7 @@ class InventoryDecisionSystem:
         self.root.title("智能库存决策系统 V4.8")
         self.root.geometry("1620x920")
         self.root.minsize(1200, 720)
-        self.root.configure(bg="#FFFFFF")
+        self.root.configure(bg=ERP_PAGE_BG)
 
         base_dir = get_base_dir()
         self.default_data_dir = os.path.join(base_dir, "data")
@@ -67,6 +79,7 @@ class InventoryDecisionSystem:
 
         self.result_data = None
         self.family_list = ["全部"]
+        self._family_popup_visible = False
 
         self.auto_scanning = False
         self.scan_job_id = None
@@ -128,26 +141,28 @@ class InventoryDecisionSystem:
     def setup_styles(self):
         style = ttk.Style()
         style.theme_use("clam")
-        style.configure("Card.TLabelframe", padding=12, background="#FFFFFF", relief="flat", borderwidth=1)
-        style.configure("Card.TLabelframe.Label", background="#FFFFFF", foreground="#1E3A5F", font=UI_FONT_BOLD)
-        style.configure("Modern.Treeview",
-                        background="#FFFFFF",
-                        foreground="#1F2937",
-                        fieldbackground="#FFFFFF",
-                        rowheight=30,
+        style.configure("ERP.TLabelframe", padding=6, background=ERP_PANEL_BG, relief="flat", borderwidth=1)
+        style.configure("ERP.TLabelframe.Label", background=ERP_PANEL_BG, foreground=ERP_TEXT, font=UI_FONT_BOLD)
+        style.configure("ERP.Treeview",
+                        background=ERP_PANEL_BG,
+                        foreground=ERP_TEXT,
+                        fieldbackground=ERP_PANEL_BG,
+                        rowheight=26,
                         borderwidth=0,
                         font=UI_FONT)
-        style.configure("Modern.Treeview.Heading",
-                        background="#F1F5F9",
-                        foreground="#1E3A5F",
+        style.configure("ERP.Treeview.Heading",
+                        background=ERP_TABLE_HEAD,
+                        foreground=ERP_TEXT,
                         font=UI_FONT_BOLD,
                         relief="flat",
-                        borderwidth=0)
-        style.map("Modern.Treeview",
-                  background=[("selected", "#DBEAFE")],
-                  foreground=[("selected", "#0F172A")])
-        style.map("Modern.Treeview.Heading",
-                  background=[("active", "#E2E8F0")])
+                        borderwidth=1)
+        style.map("ERP.Treeview",
+                  background=[("selected", "#D6E9FF")],
+                  foreground=[("selected", ERP_TEXT)])
+        style.map("ERP.Treeview.Heading",
+                  background=[("active", "#D6E9FF")])
+        style.configure("ERP.TCombobox", padding=2)
+        style.configure("ERP.TEntry", padding=2)
 
     def _bind_shortcuts(self):
         for key in ("<KeyPress-Shift_L>", "<KeyPress-Shift_R>"):
@@ -156,187 +171,209 @@ class InventoryDecisionSystem:
             self.root.bind(key, lambda e: setattr(self, "shift_pressed", False))
 
     def _section(self, parent, title):
-        outer = tk.Frame(parent, bg="#FFFFFF", highlightbackground="#E2E8F0", highlightthickness=1)
-        outer.pack(fill="x", padx=16, pady=(0, 10))
-        tk.Label(outer, text=title, font=UI_FONT_BOLD, bg="#FFFFFF", fg="#1E3A5F").pack(
-            anchor="w", padx=12, pady=(10, 4))
-        body = tk.Frame(outer, bg="#FFFFFF")
-        body.pack(fill="x", padx=12, pady=(0, 12))
+        outer = tk.Frame(parent, bg=ERP_PANEL_BG, highlightbackground=ERP_BORDER, highlightthickness=1)
+        outer.pack(fill="x", padx=8, pady=(0, 6))
+        tk.Label(outer, text=title, font=UI_FONT_BOLD, bg=ERP_PANEL_BG, fg=ERP_TEXT).pack(
+            anchor="w", padx=8, pady=(6, 2))
+        body = tk.Frame(outer, bg=ERP_PANEL_BG)
+        body.pack(fill="x", padx=8, pady=(0, 6))
         return body
 
-    def _frame(self, parent):
-        frame = tk.Frame(parent, bg="#FFFFFF")
-        return frame
+    def _frame(self, parent, bg=None):
+        return tk.Frame(parent, bg=bg or ERP_PANEL_BG)
+
+    def _lbl(self, parent, text, bold=False, fg=None):
+        return tk.Label(parent, text=text, font=UI_FONT_BOLD if bold else UI_FONT,
+                        bg=parent.cget("bg"), fg=fg or ERP_TEXT)
+
+    def _erp_button(self, parent, text, command, color=ERP_BTN_BLUE, width=None):
+        kw = dict(text=text, command=command, font=UI_FONT, bg=color, fg="white",
+                  relief="flat", padx=10, pady=3, cursor="hand2")
+        if width:
+            kw["width"] = width
+        return tk.Button(parent, **kw)
 
     def _set_combo_values(self, combo, values):
         combo["values"] = values
 
-    def _set_label(self, label, text, color="#334155"):
+    def _set_label(self, label, text, color=ERP_TEXT):
         label.configure(text=text, fg=color)
 
+    def _family_matches(self, query):
+        query = (query or "").strip()
+        if not query or query == "全部":
+            return list(self.family_list)
+        q = query.lower()
+        starts = [f for f in self.family_list if f != "全部" and f.lower().startswith(q)]
+        contains = [f for f in self.family_list if f != "全部" and q in f.lower() and f not in starts]
+        all_match = ["全部"] if q in "全部" or "全部".startswith(q) else []
+        return all_match + starts + contains if (all_match or starts or contains) else list(self.family_list)
+
+    def _best_family_match(self, typed, matches):
+        typed_l = typed.strip().lower()
+        if not typed_l:
+            return None
+        for item in matches:
+            if item.lower().startswith(typed_l):
+                return item
+        return matches[0] if matches else None
+
+    def _show_family_popup(self, matches):
+        if not matches:
+            self._hide_family_popup()
+            return
+        self.family_popup.delete(0, tk.END)
+        for item in matches[:12]:
+            self.family_popup.insert(tk.END, item)
+        self.family_combo.update_idletasks()
+        x = self.family_combo.winfo_rootx() - self.root.winfo_rootx()
+        y = self.family_combo.winfo_rooty() - self.root.winfo_rooty() + self.family_combo.winfo_height()
+        w = max(self.family_combo.winfo_width(), 180)
+        rows = min(len(matches), 8)
+        self.family_popup.place(x=x, y=y, width=w, height=rows * 22 + 4)
+        self._family_popup_visible = True
+
+    def _hide_family_popup(self):
+        if hasattr(self, "family_popup"):
+            self.family_popup.place_forget()
+        self._family_popup_visible = False
+
+    def _apply_family_value(self, value):
+        self.filter_family.set(value)
+        self._hide_family_popup()
+        self.refresh_display()
+
+    def _on_family_popup_select(self, _event=None):
+        sel = self.family_popup.curselection()
+        if sel:
+            self._apply_family_value(self.family_popup.get(sel[0]))
+        self.family_combo.focus_set()
+
     def setup_ui(self):
-        header = tk.Frame(self.root, bg="#FFFFFF")
-        header.pack(fill="x", padx=16, pady=(12, 6))
-        tk.Label(header, text="智能库存决策系统", font=UI_TITLE_FONT,
-                 bg="#FFFFFF", fg="#0F172A").pack(anchor="w")
-        tk.Label(header, text="库存决策分析 · 订柜体积监控 · 多维筛选与排序",
-                 font=UI_FONT, bg="#FFFFFF", fg="#64748B").pack(anchor="w", pady=(2, 0))
+        header = tk.Frame(self.root, bg=ERP_HEADER_BG)
+        header.pack(fill="x")
+        header_inner = self._frame(header, ERP_HEADER_BG)
+        header_inner.pack(fill="x", padx=10, pady=8)
+        tk.Label(header_inner, text="智能库存决策系统 V4.8", font=UI_TITLE_FONT,
+                 bg=ERP_HEADER_BG, fg="white").pack(side="left")
+        tk.Label(header_inner, text="库存决策 · 订柜监控", font=UI_FONT,
+                 bg=ERP_HEADER_BG, fg="#DCEBFF").pack(side="left", padx=(12, 0))
+        btn_box = self._frame(header_inner, ERP_HEADER_BG)
+        btn_box.pack(side="right")
+        self._erp_button(btn_box, "生成分析报告", self.generate_analysis, ERP_BTN_GREEN, 12).pack(side="left", padx=(0, 6))
+        self._erp_button(btn_box, "导出 Excel", self.export_excel, ERP_BTN_BLUE, 10).pack(side="left")
 
-        dir_body = self._section(self.root, "数据源配置")
-        dir_row = self._frame(dir_body)
-        dir_row.pack(fill="x")
-        tk.Label(dir_row, text="数据根目录", font=UI_FONT, bg="#FFFFFF").grid(row=0, column=0, sticky="w", padx=(0, 8))
-        self.dir_entry = ttk.Entry(dir_row, textvariable=self.data_dir, width=52)
-        self.dir_entry.grid(row=0, column=1, padx=(0, 8))
-        ttk.Button(dir_row, text="浏览", command=self.select_data_dir).grid(row=0, column=2, padx=(0, 16))
-        tk.Label(dir_row, text="渠道", font=UI_FONT, bg="#FFFFFF").grid(row=0, column=3, sticky="w", padx=(0, 8))
-        self.channel_combo = ttk.Combobox(dir_row, textvariable=self.channel, width=18, state="readonly")
-        self.channel_combo.grid(row=0, column=4, padx=(0, 8))
+        toolbar = tk.Frame(self.root, bg=ERP_PANEL_BG, highlightbackground=ERP_BORDER, highlightthickness=1)
+        toolbar.pack(fill="x", padx=8, pady=(6, 4))
+
+        row1 = self._frame(toolbar)
+        row1.pack(fill="x", padx=8, pady=(6, 4))
+        self._lbl(row1, "数据目录").pack(side="left")
+        self.dir_entry = ttk.Entry(row1, textvariable=self.data_dir, width=42, style="ERP.TEntry")
+        self.dir_entry.pack(side="left", padx=(4, 4))
+        self._erp_button(row1, "浏览", self.select_data_dir, ERP_BTN_GREY, 6).pack(side="left", padx=(0, 10))
+        self._lbl(row1, "渠道").pack(side="left")
+        self.channel_combo = ttk.Combobox(row1, textvariable=self.channel, width=10, state="readonly", style="ERP.TCombobox")
+        self.channel_combo.pack(side="left", padx=(4, 4))
         self.channel_combo.bind("<<ComboboxSelected>>", lambda _e: self.update_file_status())
-        ttk.Button(dir_row, text="刷新渠道", command=lambda: self.refresh_channels()).grid(row=0, column=5)
-
-        self.file_status_label = tk.Label(dir_body, text="请选择数据根目录并刷新渠道列表",
-                                        font=UI_FONT, fg="#64748B", bg="#FFFFFF", anchor="w")
-        self.file_status_label.pack(fill="x", pady=(8, 0))
-
-        auto_body = self._section(self.root, "自动扫描")
-        auto_row = self._frame(auto_body)
-        auto_row.pack(fill="x")
-        tk.Label(auto_row, text="间隔(分钟)", font=UI_FONT, bg="#FFFFFF").pack(side="left")
-        self.interval_entry = ttk.Entry(auto_row, width=8)
-        self.interval_entry.insert(0, str(self.auto_scan_interval))
-        self.interval_entry.pack(side="left", padx=(8, 12))
-        self.auto_btn = tk.Button(auto_row, text="开始自动扫描", width=12, font=UI_FONT_BOLD,
-                                  bg="#16A34A", fg="white", relief="flat", command=self.toggle_auto_scan)
-        self.auto_btn.pack(side="left", padx=(0, 12))
-        self.auto_status = tk.Label(auto_row, text="状态：已停止", font=UI_FONT, fg="#64748B", bg="#FFFFFF")
-        self.auto_status.pack(side="left")
-        tk.Label(auto_body, text=f"归档目录：{self.default_output_dir}",
-                font=UI_MONO_FONT, fg="#94A3B8", bg="#FFFFFF", anchor="w").pack(fill="x", pady=(8, 0))
-
-        param_body = self._section(self.root, "时间参数（天）")
-        param_row = self._frame(param_body)
-        param_row.pack(fill="x")
-        tk.Label(param_row, text="Lead Time", font=UI_FONT, bg="#FFFFFF").pack(side="left")
-        self.lead_time = ttk.Entry(param_row, width=10)
+        self._erp_button(row1, "刷新", lambda: self.refresh_channels(), ERP_BTN_GREY, 5).pack(side="left", padx=(0, 14))
+        self._lbl(row1, "Lead Time").pack(side="left")
+        self.lead_time = ttk.Entry(row1, width=5, style="ERP.TEntry")
         self.lead_time.insert(0, "90")
-        self.lead_time.pack(side="left", padx=(8, 24))
-        tk.Label(param_row, text="物流时间", font=UI_FONT, bg="#FFFFFF").pack(side="left")
-        self.logistics_time = ttk.Entry(param_row, width=10)
+        self.lead_time.pack(side="left", padx=(4, 10))
+        self._lbl(row1, "物流").pack(side="left")
+        self.logistics_time = ttk.Entry(row1, width=5, style="ERP.TEntry")
         self.logistics_time.insert(0, "30")
-        self.logistics_time.pack(side="left", padx=8)
+        self.logistics_time.pack(side="left", padx=(4, 14))
+        self._lbl(row1, "扫描(分)").pack(side="left")
+        self.interval_entry = ttk.Entry(row1, width=5, style="ERP.TEntry")
+        self.interval_entry.insert(0, str(self.auto_scan_interval))
+        self.interval_entry.pack(side="left", padx=(4, 6))
+        self.auto_btn = self._erp_button(row1, "自动扫描", self.toggle_auto_scan, ERP_BTN_GREEN, 8)
+        self.auto_btn.pack(side="left", padx=(0, 8))
+        self.auto_status = self._lbl(row1, "已停止", fg=ERP_MUTED)
+        self.auto_status.pack(side="left")
 
-        self.help_visible = tk.BooleanVar(value=False)
-        help_toggle_frame = self._frame(self.root)
-        help_toggle_frame.pack(fill="x", padx=16, pady=(0, 4))
-        self.help_toggle_btn = tk.Button(help_toggle_frame, text="展开说明", font=UI_FONT,
-                                        fg="#2563EB", bg="#FFFFFF", relief="flat",
-                                        command=self.toggle_help)
-        self.help_toggle_btn.pack(anchor="w")
+        self.file_status_label = self._lbl(toolbar, "请选择数据根目录", fg=ERP_MUTED)
+        self.file_status_label.pack(anchor="w", padx=8, pady=(0, 4))
 
-        self.help_frame = tk.Frame(self.root, bg="#FFFFFF", highlightbackground="#E2E8F0", highlightthickness=1)
-        help_text = (
-            "数据源：各渠道文件夹需含 stock.csv / PO.csv / Sales 8-30.csv / Sales 15.csv / Sales 30.csv\n"
-            "决策逻辑：取三档销售最大日均需求；「下单备货」计入备货体积，「催促发货」计入催发货体积（在途×体积系数）\n"
-            "筛选：地区 / 决策 / Family 可组合，体积面板会随当前视图实时更新\n"
-            "排序：使用下方排序栏设置主/次排序，或点击表头（Shift+点击设次排序）"
-        )
-        self.help_label = tk.Label(self.help_frame, text=help_text, justify="left",
-                                   font=UI_FONT, fg="#475569", bg="#FFFFFF")
-        self.help_label.pack(anchor="w")
-
-        action_body = self._section(self.root, "分析与导出")
-        action_row = self._frame(action_body)
-        action_row.pack(fill="x")
-        tk.Button(action_row, text="生成分析报告", width=14, height=1, font=UI_FONT_BOLD,
-                  bg="#16A34A", fg="white", relief="flat",
-                  command=self.generate_analysis).pack(side="left", padx=(0, 10))
-        tk.Button(action_row, text="导出 Excel", width=12, height=1, font=UI_FONT_BOLD,
-                  bg="#2563EB", fg="white", relief="flat",
-                  command=self.export_excel).pack(side="left")
-
-        filter_body = self._section(self.root, "筛选与排序")
-        filter_row = self._frame(filter_body)
-        filter_row.pack(fill="x", pady=(0, 8))
-
-        tk.Label(filter_row, text="地区", font=UI_FONT, bg="#FFFFFF").grid(row=0, column=0, sticky="w", padx=(0, 6))
-        self.region_combo = ttk.Combobox(filter_row, textvariable=self.filter_region, width=10,
-                                         values=["全部", "北岛", "南岛"], state="readonly")
-        self.region_combo.grid(row=0, column=1, padx=(0, 16))
+        row2 = self._frame(toolbar)
+        row2.pack(fill="x", padx=8, pady=(0, 6))
+        self._lbl(row2, "地区").pack(side="left")
+        self.region_combo = ttk.Combobox(row2, textvariable=self.filter_region, width=8,
+                                         values=["全部", "北岛", "南岛"], state="readonly", style="ERP.TCombobox")
+        self.region_combo.pack(side="left", padx=(4, 10))
         self.region_combo.bind("<<ComboboxSelected>>", lambda _e: self.refresh_display())
-
-        tk.Label(filter_row, text="决策", font=UI_FONT, bg="#FFFFFF").grid(row=0, column=2, sticky="w", padx=(0, 6))
-        self.decision_combo = ttk.Combobox(
-            filter_row, textvariable=self.filter_decision, width=12,
-            values=["全部", "下单备货", "催促发货", "保持现状", "暂无销售"], state="readonly")
-        self.decision_combo.grid(row=0, column=3, padx=(0, 16))
+        self._lbl(row2, "决策").pack(side="left")
+        self.decision_combo = ttk.Combobox(row2, textvariable=self.filter_decision, width=10,
+            values=["全部", "下单备货", "催促发货", "保持现状", "暂无销售"], state="readonly", style="ERP.TCombobox")
+        self.decision_combo.pack(side="left", padx=(4, 10))
         self.decision_combo.bind("<<ComboboxSelected>>", lambda _e: self.refresh_display())
-
-        tk.Label(filter_row, text="Family（可搜索）", font=UI_FONT, bg="#FFFFFF").grid(row=0, column=4, sticky="w", padx=(0, 6))
-        self.family_combo = ttk.Combobox(filter_row, textvariable=self.filter_family, width=22,
-                                         values=self.family_list)
-        self.family_combo.grid(row=0, column=5, padx=(0, 16))
+        self._lbl(row2, "Family").pack(side="left")
+        self.family_combo = ttk.Combobox(row2, textvariable=self.filter_family, width=18,
+                                         values=self.family_list, style="ERP.TCombobox")
+        self.family_combo.pack(side="left", padx=(4, 6))
         self.family_combo.bind("<<ComboboxSelected>>", lambda _e: self.on_family_selected())
         self.family_combo.bind("<KeyRelease>", self.on_family_keyrelease)
-        self.family_combo.bind("<Return>", lambda _e: self.refresh_display())
-
-        tk.Button(filter_row, text="重置", width=8, font=UI_FONT, bg="#64748B", fg="white",
-                  relief="flat", command=self.reset_filters).grid(row=0, column=6)
-
-        sort_row = self._frame(filter_body)
-        sort_row.pack(fill="x")
-        tk.Label(sort_row, text="主排序", font=UI_FONT, bg="#FFFFFF").pack(side="left")
-        self.sort_primary_combo = ttk.Combobox(sort_row, textvariable=self.sort_primary_var, width=14,
-                                               values=SORT_OPTIONS, state="readonly")
-        self.sort_primary_combo.pack(side="left", padx=(6, 4))
+        self.family_combo.bind("<Return>", self.on_family_return)
+        self.family_combo.bind("<Escape>", lambda _e: self._hide_family_popup())
+        self.family_combo.bind("<FocusOut>", lambda _e: self.root.after(150, self._hide_family_popup))
+        self.family_popup = tk.Listbox(self.root, height=8, font=UI_FONT, bg="white", fg=ERP_TEXT,
+                                       selectbackground=ERP_BTN_BLUE, selectforeground="white",
+                                       relief="solid", borderwidth=1, highlightthickness=0)
+        self.family_popup.bind("<ButtonRelease-1>", self._on_family_popup_select)
+        self.family_popup.bind("<Return>", self._on_family_popup_select)
+        self._erp_button(row2, "重置", self.reset_filters, ERP_BTN_GREY, 5).pack(side="left", padx=(4, 14))
+        self._lbl(row2, "主排序").pack(side="left")
+        self.sort_primary_combo = ttk.Combobox(row2, textvariable=self.sort_primary_var, width=11,
+                                               values=SORT_OPTIONS, state="readonly", style="ERP.TCombobox")
+        self.sort_primary_combo.pack(side="left", padx=(4, 2))
         self.sort_primary_combo.bind("<<ComboboxSelected>>", lambda _e: self.on_sort_control_change())
-        self.sort_primary_dir_btn = tk.Button(sort_row, text="升序 ↑", width=8, font=UI_FONT,
-                                              relief="flat", bg="#E2E8F0",
-                                              command=self.toggle_primary_sort_dir)
-        self.sort_primary_dir_btn.pack(side="left", padx=(0, 16))
-
-        tk.Label(sort_row, text="次排序", font=UI_FONT, bg="#FFFFFF").pack(side="left")
-        self.sort_secondary_combo = ttk.Combobox(sort_row, textvariable=self.sort_secondary_var, width=14,
-                                                 values=SORT_OPTIONS, state="readonly")
-        self.sort_secondary_combo.pack(side="left", padx=(6, 4))
+        self.sort_primary_dir_btn = tk.Button(row2, text="↑", width=2, font=UI_FONT, relief="flat",
+                                              bg=ERP_TABLE_HEAD, command=self.toggle_primary_sort_dir)
+        self.sort_primary_dir_btn.pack(side="left", padx=(0, 8))
+        self._lbl(row2, "次排序").pack(side="left")
+        self.sort_secondary_combo = ttk.Combobox(row2, textvariable=self.sort_secondary_var, width=11,
+                                                 values=SORT_OPTIONS, state="readonly", style="ERP.TCombobox")
+        self.sort_secondary_combo.pack(side="left", padx=(4, 2))
         self.sort_secondary_combo.bind("<<ComboboxSelected>>", lambda _e: self.on_sort_control_change())
-        self.sort_secondary_dir_btn = tk.Button(sort_row, text="升序 ↑", width=8, font=UI_FONT,
-                                                relief="flat", bg="#E2E8F0",
-                                                command=self.toggle_secondary_sort_dir)
-        self.sort_secondary_dir_btn.pack(side="left", padx=(0, 8))
-        tk.Button(sort_row, text="清除次排序", width=10, font=UI_FONT, bg="#94A3B8", fg="white",
-                  relief="flat", command=self.clear_secondary_sort).pack(side="left", padx=(0, 12))
-
-        self.sort_status_label = tk.Label(sort_row, text="排序：默认（决策优先级）", font=UI_FONT, fg="#64748B", bg="#FFFFFF")
+        self.sort_secondary_dir_btn = tk.Button(row2, text="↑", width=2, font=UI_FONT, relief="flat",
+                                                bg=ERP_TABLE_HEAD, command=self.toggle_secondary_sort_dir)
+        self.sort_secondary_dir_btn.pack(side="left", padx=(0, 6))
+        self._erp_button(row2, "清除次排", self.clear_secondary_sort, ERP_BTN_GREY, 7).pack(side="left", padx=(0, 8))
+        self.sort_status_label = self._lbl(row2, "排序：默认", fg=ERP_MUTED)
         self.sort_status_label.pack(side="left")
 
-        container_body = self._section(self.root, f"订柜状态监控（阈值 {CONTAINER_THRESHOLD:.0f} m³/柜）")
-        self.container_status_label = tk.Label(container_body, text="等待分析...",
-                                               font=("Microsoft YaHei UI", 11), fg="#64748B",
-                                               justify="left", anchor="w", bg="#FFFFFF")
-        self.container_status_label.pack(fill="x")
-        self.volume_detail_label = tk.Label(container_body, text="", font=UI_FONT,
-                                            fg="#475569", justify="left", anchor="w", bg="#FFFFFF")
-        self.volume_detail_label.pack(fill="x", pady=(6, 0))
+        status_bar = tk.Frame(self.root, bg=ERP_STATUS_BG, highlightbackground="#F0D78C", highlightthickness=1)
+        status_bar.pack(fill="x", padx=8, pady=(0, 4))
+        self.container_status_label = tk.Label(status_bar, text="等待分析...", font=UI_FONT_BOLD,
+                                               bg=ERP_STATUS_BG, fg=ERP_TEXT, justify="left", anchor="w")
+        self.container_status_label.pack(fill="x", padx=8, pady=(4, 0))
+        self.volume_detail_label = tk.Label(status_bar, text="", font=UI_FONT,
+                                            bg=ERP_STATUS_BG, fg=ERP_MUTED, justify="left", anchor="w")
+        self.volume_detail_label.pack(fill="x", padx=8, pady=(0, 4))
 
-        table_section = tk.Frame(self.root, bg="#FFFFFF", highlightbackground="#E2E8F0", highlightthickness=1)
-        table_section.pack(fill="both", expand=True, padx=16, pady=(0, 10))
-        tk.Label(table_section, text="分析结果（点击表头排序，Shift+点击设次排序）",
-                 font=UI_FONT_BOLD, bg="#FFFFFF", fg="#1E3A5F").pack(anchor="w", padx=12, pady=(10, 6))
+        table_section = tk.Frame(self.root, bg=ERP_PANEL_BG, highlightbackground=ERP_BORDER, highlightthickness=1)
+        table_section.pack(fill="both", expand=True, padx=8, pady=(0, 4))
+        head = self._frame(table_section)
+        head.pack(fill="x", padx=8, pady=(6, 4))
+        self._lbl(head, "分析结果", bold=True).pack(side="left")
+        self._lbl(head, "（点击表头排序，Shift+点击设次排序）", fg=ERP_MUTED).pack(side="left", padx=(8, 0))
 
-        table_wrap = tk.Frame(table_section, bg="#FFFFFF")
-        table_wrap.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        table_wrap = self._frame(table_section)
+        table_wrap.pack(fill="both", expand=True, padx=6, pady=(0, 6))
 
         columns = ("SKU", "Name", "ProductFamily", "地区", "在库库存", "在途库存", "总量库存",
                    "8-30天", "15天", "30天", "采用需求", "需求来源",
                    "LT预估", "物流预估", "决策建议", "建议订货量", "体积系数", "备货体积", "催发货体积", "详细说明")
-        self.tree = ttk.Treeview(table_wrap, columns=columns, show="headings", height=14, style="Modern.Treeview")
+        self.tree = ttk.Treeview(table_wrap, columns=columns, show="headings", height=16, style="ERP.Treeview")
         self.column_display_names = columns
 
-        col_widths = [80, 160, 90, 55, 65, 65, 65, 60, 60, 60, 70, 80, 75, 75, 85, 75, 70, 75, 80, 160]
+        col_widths = [78, 150, 88, 50, 62, 62, 62, 58, 58, 58, 68, 76, 72, 72, 82, 72, 68, 72, 76, 150]
         for col, width in zip(columns, col_widths):
             self.tree.heading(col, text=col, command=lambda c=col: self.on_header_click(c))
-            self.tree.column(col, width=width, anchor="center")
+            anchor = "w" if col in ("Name", "详细说明", "ProductFamily") else "center"
+            self.tree.column(col, width=width, anchor=anchor, stretch=False)
 
         scrollbar_y = ttk.Scrollbar(table_wrap, orient="vertical", command=self.tree.yview)
         scrollbar_x = ttk.Scrollbar(table_wrap, orient="horizontal", command=self.tree.xview)
@@ -347,24 +384,30 @@ class InventoryDecisionSystem:
         table_wrap.grid_rowconfigure(0, weight=1)
         table_wrap.grid_columnconfigure(0, weight=1)
 
-        self.tree.tag_configure("normal", background="#FFFFFF", foreground="#1F2937")
-        self.tree.tag_configure("urgent", background="#FFFFFF", foreground="#B91C1C")
-        self.tree.tag_configure("warning", background="#FFFFFF", foreground="#B45309")
-        self.tree.tag_configure("no_sales", background="#FFFFFF", foreground="#9CA3AF")
+        self.tree.tag_configure("row", background=ERP_PANEL_BG, foreground=ERP_TEXT)
 
-        summary_body = self._section(self.root, "汇总统计")
-        self.summary_label = tk.Label(summary_body, text="等待分析...", font=UI_MONO_FONT,
-                                      justify="left", anchor="w", bg="#FFFFFF")
-        self.summary_label.pack(fill="x")
+        footer = tk.Frame(self.root, bg=ERP_PANEL_BG, highlightbackground=ERP_BORDER, highlightthickness=1)
+        footer.pack(fill="x", padx=8, pady=(0, 8))
+        self.summary_label = tk.Label(footer, text="等待分析...", font=UI_MONO_FONT,
+                                      justify="left", anchor="w", bg=ERP_PANEL_BG, fg=ERP_TEXT)
+        self.summary_label.pack(fill="x", padx=8, pady=6)
+
+        self.help_visible = tk.BooleanVar(value=False)
+        self.help_frame = tk.Frame(self.root, bg=ERP_PANEL_BG, highlightbackground=ERP_BORDER, highlightthickness=1)
+        help_text = (
+            "数据：stock.csv / PO.csv / Sales 8-30.csv / Sales 15.csv / Sales 30.csv  |  "
+            "备货体积=下单缺口×系数  |  催发体积=在途×系数  |  Family 支持模糊搜索（如 win→Winston）"
+        )
+        self.help_label = tk.Label(self.help_frame, text=help_text, justify="left",
+                                   font=UI_FONT, fg=ERP_MUTED, bg=ERP_PANEL_BG)
+        self.help_label.pack(anchor="w", padx=8, pady=6)
 
     def toggle_help(self):
         if self.help_visible.get():
             self.help_frame.pack_forget()
-            self.help_toggle_btn.configure(text="展开说明")
             self.help_visible.set(False)
         else:
-            self.help_frame.pack(fill="x", padx=16, pady=(0, 10), after=self.help_toggle_btn.master)
-            self.help_toggle_btn.configure(text="收起说明")
+            self.help_frame.pack(fill="x", padx=8, pady=(0, 4), before=self.summary_label.master)
             self.help_visible.set(True)
 
     def select_data_dir(self):
@@ -412,22 +455,49 @@ class InventoryDecisionSystem:
         return all_ready
 
     def on_family_selected(self, _value=None):
+        self._hide_family_popup()
         self.refresh_display()
 
+    def on_family_return(self, _event=None):
+        typed = self.filter_family.get().strip()
+        matches = self._family_matches(typed)
+        best = self._best_family_match(typed, matches)
+        if best:
+            self.filter_family.set(best)
+        self._hide_family_popup()
+        self.refresh_display()
+        return "break"
+
     def on_family_keyrelease(self, event):
-        if event.keysym in ("Up", "Down", "Return", "Tab", "Shift_L", "Shift_R"):
+        if event.keysym in ("Up", "Down", "Shift_L", "Shift_R", "Control_L", "Control_R"):
+            if event.keysym == "Down" and self._family_popup_visible:
+                self.family_popup.focus_set()
             return
-        typed = self.filter_family.get().strip().lower()
-        if not typed:
-            self._set_combo_values(self.family_combo, self.family_list)
+        if event.keysym == "Escape":
+            self._hide_family_popup()
             return
-        matches = [f for f in self.family_list if typed in f.lower()]
-        if not matches:
-            matches = self.family_list
+        if event.keysym == "Return":
+            return
+
+        typed = self.filter_family.get()
+        matches = self._family_matches(typed)
         self._set_combo_values(self.family_combo, matches)
-        if len(matches) == 1 and matches[0] != "全部":
-            self.filter_family.set(matches[0])
-            self.refresh_display()
+
+        if typed.strip():
+            best = self._best_family_match(typed, matches)
+            if best and best.lower().startswith(typed.strip().lower()) and len(best) > len(typed.strip()):
+                pos = len(typed.strip())
+                self.filter_family.set(best)
+                self.family_combo.icursor(pos)
+                self.family_combo.selection_range(pos, tk.END)
+            if len(matches) > 1 or (len(matches) == 1 and matches[0].lower() != typed.strip().lower()):
+                self._show_family_popup(matches)
+            else:
+                self._hide_family_popup()
+        else:
+            self._hide_family_popup()
+
+        self.refresh_display()
 
     def _display_name_for_col(self, df_col):
         for display, internal in COL_MAP.items():
@@ -476,6 +546,7 @@ class InventoryDecisionSystem:
         self.filter_decision.set("全部")
         self.filter_family.set("全部")
         self._set_combo_values(self.family_combo, self.family_list)
+        self._hide_family_popup()
         self.sort_primary = None
         self.sort_secondary = None
         self.sort_primary_asc = True
@@ -556,6 +627,13 @@ class InventoryDecisionSystem:
                 df = exact
             else:
                 df = df[df['ProductFamily'].str.lower().str.contains(family.lower(), na=False)]
+            if len(df) == 0 and self.result_data is not None:
+                fuzzy = self.result_data[
+                    self.result_data['ProductFamily'].str.lower().str.contains(family.lower(), na=False)
+                    | self.result_data['Name'].str.lower().str.contains(family.lower(), na=False)
+                ]
+                if len(fuzzy) > 0:
+                    df = fuzzy
         return df
 
     def update_volume_displays(self, df):
@@ -665,15 +743,7 @@ class InventoryDecisionSystem:
                 f"{row['催发货体积']:.4f}" if row['催发货体积'] > 0 else "-",
                 row['详细说明']
             )
-            if row['决策建议'] == "下单备货":
-                tags = ("urgent",)
-            elif row['决策建议'] == "催促发货":
-                tags = ("warning",)
-            elif row['决策建议'] == "暂无销售":
-                tags = ("no_sales",)
-            else:
-                tags = ("normal",)
-            self.tree.insert("", "end", values=values, tags=tags)
+            self.tree.insert("", "end", values=values, tags=("row",))
 
         self.update_volume_displays(df)
 
@@ -710,8 +780,8 @@ class InventoryDecisionSystem:
 
     def start_auto_scan(self):
         self.auto_scanning = True
-        self.auto_btn.configure(text="停止自动扫描", bg="#DC2626")
-        self._set_label(self.auto_status, f"运行中（每 {self.auto_scan_interval} 分钟扫描全部渠道）", "#16A34A")
+        self.auto_btn.configure(text="停止扫描", bg="#D9534F")
+        self._set_label(self.auto_status, f"运行中 / {self.auto_scan_interval}分钟", "#449D44")
         self.scan_all_channels()
 
     def stop_auto_scan(self):
@@ -719,8 +789,8 @@ class InventoryDecisionSystem:
         if self.scan_job_id:
             self.root.after_cancel(self.scan_job_id)
             self.scan_job_id = None
-        self.auto_btn.configure(text="开始自动扫描", bg="#16A34A")
-        self._set_label(self.auto_status, "状态：已停止", "#64748B")
+        self.auto_btn.configure(text="自动扫描", bg=ERP_BTN_GREEN)
+        self._set_label(self.auto_status, "已停止", ERP_MUTED)
         self._set_label(self.summary_label, "自动扫描已停止")
 
     def scan_all_channels(self):
@@ -1231,7 +1301,7 @@ class InventoryDecisionSystem:
 def main():
     try:
         root = tk.Tk()
-        root.configure(bg="#FFFFFF")
+        root.configure(bg=ERP_PAGE_BG)
         app = InventoryDecisionSystem(root)
         root.mainloop()
     except Exception as e:
