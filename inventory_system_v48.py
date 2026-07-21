@@ -1,17 +1,14 @@
 import pandas as pd
 import os
 import json
+import sys
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from datetime import datetime
-import customtkinter as ctk
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from PIL import ImageGrab
-
-ctk.set_appearance_mode("light")
-ctk.set_default_color_theme("blue")
 
 # ========== 中文字体修复 ==========
 plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS', 'DejaVu Sans']
@@ -36,7 +33,10 @@ def get_base_dir():
     else:
         return os.path.dirname(os.path.abspath(__file__))
 
-import sys
+UI_FONT = ("Microsoft YaHei UI", 10)
+UI_FONT_BOLD = ("Microsoft YaHei UI", 10, "bold")
+UI_TITLE_FONT = ("Microsoft YaHei UI", 18, "bold")
+UI_MONO_FONT = ("Consolas", 10)
 
 class InventoryDecisionSystem:
     def __init__(self, root):
@@ -127,16 +127,17 @@ class InventoryDecisionSystem:
     def setup_styles(self):
         style = ttk.Style()
         style.theme_use("clam")
+        style.configure("Card.TLabelframe", padding=10)
         style.configure("Modern.Treeview",
                         background="#FFFFFF",
                         foreground="#1F2937",
                         fieldbackground="#FFFFFF",
                         rowheight=28,
-                        font=("Segoe UI", 10))
+                        font=UI_FONT)
         style.configure("Modern.Treeview.Heading",
                         background="#E8EEF7",
                         foreground="#1E3A5F",
-                        font=("Segoe UI", 10, "bold"),
+                        font=UI_FONT_BOLD,
                         relief="flat")
         style.map("Modern.Treeview",
                   background=[("selected", "#D6E4FF")],
@@ -151,164 +152,166 @@ class InventoryDecisionSystem:
             self.root.bind(key, lambda e: setattr(self, "shift_pressed", False))
 
     def _section(self, parent, title):
-        frame = ctk.CTkFrame(parent, corner_radius=10)
+        frame = ttk.LabelFrame(parent, text=title, style="Card.TLabelframe")
         frame.pack(fill="x", padx=16, pady=(0, 10))
-        ctk.CTkLabel(frame, text=title, font=ctk.CTkFont(size=14, weight="bold"),
-                     text_color="#1E3A5F").pack(anchor="w", padx=14, pady=(10, 4))
-        body = ctk.CTkFrame(frame, fg_color="transparent")
-        body.pack(fill="x", padx=14, pady=(0, 12))
-        return body
+        return frame
+
+    def _set_combo_values(self, combo, values):
+        combo["values"] = values
+
+    def _set_label(self, label, text, color="#334155"):
+        label.configure(text=text, fg=color)
 
     def setup_ui(self):
-        header = ctk.CTkFrame(self.root, fg_color="transparent")
+        header = tk.Frame(self.root, bg="#F8FAFC")
         header.pack(fill="x", padx=16, pady=(12, 6))
-        ctk.CTkLabel(header, text="智能库存决策系统",
-                     font=ctk.CTkFont(size=24, weight="bold")).pack(anchor="w")
-        ctk.CTkLabel(header, text="库存决策分析 · 订柜体积监控 · 多维筛选与排序",
-                     font=ctk.CTkFont(size=12), text_color="#64748B").pack(anchor="w", pady=(2, 0))
+        tk.Label(header, text="智能库存决策系统", font=UI_TITLE_FONT,
+                 bg="#F8FAFC", fg="#0F172A").pack(anchor="w")
+        tk.Label(header, text="库存决策分析 · 订柜体积监控 · 多维筛选与排序",
+                 font=UI_FONT, bg="#F8FAFC", fg="#64748B").pack(anchor="w", pady=(2, 0))
 
         dir_body = self._section(self.root, "数据源配置")
-        dir_row = ctk.CTkFrame(dir_body, fg_color="transparent")
+        dir_row = tk.Frame(dir_body)
         dir_row.pack(fill="x")
-        ctk.CTkLabel(dir_row, text="数据根目录").grid(row=0, column=0, sticky="w", padx=(0, 8))
-        self.dir_entry = ctk.CTkEntry(dir_row, textvariable=self.data_dir, width=420)
+        tk.Label(dir_row, text="数据根目录", font=UI_FONT).grid(row=0, column=0, sticky="w", padx=(0, 8))
+        self.dir_entry = ttk.Entry(dir_row, textvariable=self.data_dir, width=52)
         self.dir_entry.grid(row=0, column=1, padx=(0, 8))
-        ctk.CTkButton(dir_row, text="浏览", width=70, command=self.select_data_dir).grid(row=0, column=2, padx=(0, 16))
-        ctk.CTkLabel(dir_row, text="渠道").grid(row=0, column=3, sticky="w", padx=(0, 8))
-        self.channel_combo = ctk.CTkComboBox(dir_row, variable=self.channel, width=140, state="readonly",
-                                             command=lambda _: self.update_file_status())
+        ttk.Button(dir_row, text="浏览", command=self.select_data_dir).grid(row=0, column=2, padx=(0, 16))
+        tk.Label(dir_row, text="渠道", font=UI_FONT).grid(row=0, column=3, sticky="w", padx=(0, 8))
+        self.channel_combo = ttk.Combobox(dir_row, textvariable=self.channel, width=18, state="readonly")
         self.channel_combo.grid(row=0, column=4, padx=(0, 8))
-        ctk.CTkButton(dir_row, text="刷新渠道", width=90, command=lambda: self.refresh_channels()).grid(row=0, column=5)
+        self.channel_combo.bind("<<ComboboxSelected>>", lambda _e: self.update_file_status())
+        ttk.Button(dir_row, text="刷新渠道", command=lambda: self.refresh_channels()).grid(row=0, column=5)
 
-        self.file_status_label = ctk.CTkLabel(dir_body, text="请选择数据根目录并刷新渠道列表",
-                                              font=ctk.CTkFont(size=11), text_color="#64748B")
-        self.file_status_label.pack(anchor="w", pady=(8, 0))
+        self.file_status_label = tk.Label(dir_body, text="请选择数据根目录并刷新渠道列表",
+                                        font=UI_FONT, fg="#64748B", anchor="w")
+        self.file_status_label.pack(fill="x", pady=(8, 0))
 
         auto_body = self._section(self.root, "自动扫描")
-        auto_row = ctk.CTkFrame(auto_body, fg_color="transparent")
+        auto_row = tk.Frame(auto_body)
         auto_row.pack(fill="x")
-        ctk.CTkLabel(auto_row, text="间隔(分钟)").pack(side="left")
-        self.interval_entry = ctk.CTkEntry(auto_row, width=70)
+        tk.Label(auto_row, text="间隔(分钟)", font=UI_FONT).pack(side="left")
+        self.interval_entry = ttk.Entry(auto_row, width=8)
         self.interval_entry.insert(0, str(self.auto_scan_interval))
         self.interval_entry.pack(side="left", padx=(8, 12))
-        self.auto_btn = ctk.CTkButton(auto_row, text="开始自动扫描", width=130,
-                                      fg_color="#16A34A", hover_color="#15803D",
-                                      command=self.toggle_auto_scan)
+        self.auto_btn = tk.Button(auto_row, text="开始自动扫描", width=12, font=UI_FONT_BOLD,
+                                  bg="#16A34A", fg="white", relief="flat", command=self.toggle_auto_scan)
         self.auto_btn.pack(side="left", padx=(0, 12))
-        self.auto_status = ctk.CTkLabel(auto_row, text="状态：已停止", text_color="#64748B")
+        self.auto_status = tk.Label(auto_row, text="状态：已停止", font=UI_FONT, fg="#64748B")
         self.auto_status.pack(side="left")
-        ctk.CTkLabel(auto_body, text=f"归档目录：{self.default_output_dir}",
-                     font=ctk.CTkFont(family="Consolas", size=11), text_color="#94A3B8").pack(anchor="w", pady=(8, 0))
+        tk.Label(auto_body, text=f"归档目录：{self.default_output_dir}",
+                font=UI_MONO_FONT, fg="#94A3B8", anchor="w").pack(fill="x", pady=(8, 0))
 
         param_body = self._section(self.root, "时间参数（天）")
-        param_row = ctk.CTkFrame(param_body, fg_color="transparent")
+        param_row = tk.Frame(param_body)
         param_row.pack(fill="x")
-        ctk.CTkLabel(param_row, text="Lead Time").pack(side="left")
-        self.lead_time = ctk.CTkEntry(param_row, width=80)
+        tk.Label(param_row, text="Lead Time", font=UI_FONT).pack(side="left")
+        self.lead_time = ttk.Entry(param_row, width=10)
         self.lead_time.insert(0, "90")
         self.lead_time.pack(side="left", padx=(8, 24))
-        ctk.CTkLabel(param_row, text="物流时间").pack(side="left")
-        self.logistics_time = ctk.CTkEntry(param_row, width=80)
+        tk.Label(param_row, text="物流时间", font=UI_FONT).pack(side="left")
+        self.logistics_time = ttk.Entry(param_row, width=10)
         self.logistics_time.insert(0, "30")
         self.logistics_time.pack(side="left", padx=8)
 
         self.help_visible = tk.BooleanVar(value=False)
-        help_toggle_frame = ctk.CTkFrame(self.root, fg_color="transparent")
+        help_toggle_frame = tk.Frame(self.root)
         help_toggle_frame.pack(fill="x", padx=16, pady=(0, 4))
-        self.help_toggle_btn = ctk.CTkButton(help_toggle_frame, text="展开说明", width=90, height=26,
-                                             fg_color="transparent", text_color="#2563EB",
-                                             hover_color="#E8EEF7", command=self.toggle_help)
+        self.help_toggle_btn = tk.Button(help_toggle_frame, text="展开说明", font=UI_FONT,
+                                        fg="#2563EB", bg="#F8FAFC", relief="flat",
+                                        command=self.toggle_help)
         self.help_toggle_btn.pack(anchor="w")
 
-        self.help_frame = ctk.CTkFrame(self.root, corner_radius=10)
+        self.help_frame = ttk.LabelFrame(self.root, text="使用说明", padding=10)
         help_text = (
             "数据源：各渠道文件夹需含 stock.csv / PO.csv / Sales 8-30.csv / Sales 15.csv / Sales 30.csv\n"
             "决策逻辑：取三档销售最大日均需求；仅「下单备货」计入备货体积；南北岛各自 ≥69m³ 可订柜\n"
             "筛选：地区 / 决策 / Family 可组合，体积面板会随当前视图实时更新\n"
             "排序：使用下方排序栏设置主/次排序，或点击表头（Shift+点击设次排序）"
         )
-        self.help_label = ctk.CTkLabel(self.help_frame, text=help_text, justify="left",
-                                       font=ctk.CTkFont(size=11), text_color="#475569")
-        self.help_label.pack(anchor="w", padx=14, pady=12)
+        self.help_label = tk.Label(self.help_frame, text=help_text, justify="left",
+                                   font=UI_FONT, fg="#475569")
+        self.help_label.pack(anchor="w")
 
         action_body = self._section(self.root, "分析与导出")
-        action_row = ctk.CTkFrame(action_body, fg_color="transparent")
+        action_row = tk.Frame(action_body)
         action_row.pack(fill="x")
-        ctk.CTkButton(action_row, text="生成分析报告", width=150, height=36,
-                      fg_color="#16A34A", hover_color="#15803D",
-                      command=self.generate_analysis).pack(side="left", padx=(0, 10))
-        ctk.CTkButton(action_row, text="导出 Excel", width=120, height=36,
-                      command=self.export_excel).pack(side="left")
+        tk.Button(action_row, text="生成分析报告", width=14, height=1, font=UI_FONT_BOLD,
+                  bg="#16A34A", fg="white", relief="flat",
+                  command=self.generate_analysis).pack(side="left", padx=(0, 10))
+        tk.Button(action_row, text="导出 Excel", width=12, height=1, font=UI_FONT_BOLD,
+                  bg="#2563EB", fg="white", relief="flat",
+                  command=self.export_excel).pack(side="left")
 
         filter_body = self._section(self.root, "筛选与排序")
-        filter_row = ctk.CTkFrame(filter_body, fg_color="transparent")
+        filter_row = tk.Frame(filter_body)
         filter_row.pack(fill="x", pady=(0, 8))
 
-        ctk.CTkLabel(filter_row, text="地区").grid(row=0, column=0, sticky="w", padx=(0, 6))
-        self.region_combo = ctk.CTkComboBox(filter_row, variable=self.filter_region, width=100,
-                                            values=["全部", "北岛", "南岛"], state="readonly",
-                                            command=lambda _: self.refresh_display())
+        tk.Label(filter_row, text="地区", font=UI_FONT).grid(row=0, column=0, sticky="w", padx=(0, 6))
+        self.region_combo = ttk.Combobox(filter_row, textvariable=self.filter_region, width=10,
+                                         values=["全部", "北岛", "南岛"], state="readonly")
         self.region_combo.grid(row=0, column=1, padx=(0, 16))
+        self.region_combo.bind("<<ComboboxSelected>>", lambda _e: self.refresh_display())
 
-        ctk.CTkLabel(filter_row, text="决策").grid(row=0, column=2, sticky="w", padx=(0, 6))
-        self.decision_combo = ctk.CTkComboBox(
-            filter_row, variable=self.filter_decision, width=120,
-            values=["全部", "下单备货", "催促发货", "保持现状", "暂无销售"], state="readonly",
-            command=lambda _: self.refresh_display())
+        tk.Label(filter_row, text="决策", font=UI_FONT).grid(row=0, column=2, sticky="w", padx=(0, 6))
+        self.decision_combo = ttk.Combobox(
+            filter_row, textvariable=self.filter_decision, width=12,
+            values=["全部", "下单备货", "催促发货", "保持现状", "暂无销售"], state="readonly")
         self.decision_combo.grid(row=0, column=3, padx=(0, 16))
+        self.decision_combo.bind("<<ComboboxSelected>>", lambda _e: self.refresh_display())
 
-        ctk.CTkLabel(filter_row, text="Family（可搜索）").grid(row=0, column=4, sticky="w", padx=(0, 6))
-        self.family_combo = ctk.CTkComboBox(filter_row, variable=self.filter_family, width=180,
-                                            values=self.family_list, command=self.on_family_selected)
+        tk.Label(filter_row, text="Family（可搜索）", font=UI_FONT).grid(row=0, column=4, sticky="w", padx=(0, 6))
+        self.family_combo = ttk.Combobox(filter_row, textvariable=self.filter_family, width=22,
+                                         values=self.family_list)
         self.family_combo.grid(row=0, column=5, padx=(0, 16))
+        self.family_combo.bind("<<ComboboxSelected>>", lambda _e: self.on_family_selected())
         self.family_combo.bind("<KeyRelease>", self.on_family_keyrelease)
         self.family_combo.bind("<Return>", lambda _e: self.refresh_display())
 
-        ctk.CTkButton(filter_row, text="重置", width=70, fg_color="#64748B", hover_color="#475569",
-                      command=self.reset_filters).grid(row=0, column=6)
+        tk.Button(filter_row, text="重置", width=8, font=UI_FONT, bg="#64748B", fg="white",
+                  relief="flat", command=self.reset_filters).grid(row=0, column=6)
 
-        sort_row = ctk.CTkFrame(filter_body, fg_color="transparent")
+        sort_row = tk.Frame(filter_body)
         sort_row.pack(fill="x")
-        ctk.CTkLabel(sort_row, text="主排序").pack(side="left")
-        self.sort_primary_combo = ctk.CTkComboBox(sort_row, variable=self.sort_primary_var, width=130,
-                                                  values=SORT_OPTIONS, state="readonly",
-                                                  command=self.on_sort_control_change)
+        tk.Label(sort_row, text="主排序", font=UI_FONT).pack(side="left")
+        self.sort_primary_combo = ttk.Combobox(sort_row, textvariable=self.sort_primary_var, width=14,
+                                               values=SORT_OPTIONS, state="readonly")
         self.sort_primary_combo.pack(side="left", padx=(6, 4))
-        self.sort_primary_dir_btn = ctk.CTkButton(sort_row, text="升序 ↑", width=70, height=28,
-                                                  command=self.toggle_primary_sort_dir)
+        self.sort_primary_combo.bind("<<ComboboxSelected>>", lambda _e: self.on_sort_control_change())
+        self.sort_primary_dir_btn = tk.Button(sort_row, text="升序 ↑", width=8, font=UI_FONT,
+                                              relief="flat", bg="#E2E8F0",
+                                              command=self.toggle_primary_sort_dir)
         self.sort_primary_dir_btn.pack(side="left", padx=(0, 16))
 
-        ctk.CTkLabel(sort_row, text="次排序").pack(side="left")
-        self.sort_secondary_combo = ctk.CTkComboBox(sort_row, variable=self.sort_secondary_var, width=130,
-                                                      values=SORT_OPTIONS, state="readonly",
-                                                      command=self.on_sort_control_change)
+        tk.Label(sort_row, text="次排序", font=UI_FONT).pack(side="left")
+        self.sort_secondary_combo = ttk.Combobox(sort_row, textvariable=self.sort_secondary_var, width=14,
+                                                 values=SORT_OPTIONS, state="readonly")
         self.sort_secondary_combo.pack(side="left", padx=(6, 4))
-        self.sort_secondary_dir_btn = ctk.CTkButton(sort_row, text="升序 ↑", width=70, height=28,
-                                                    command=self.toggle_secondary_sort_dir)
+        self.sort_secondary_combo.bind("<<ComboboxSelected>>", lambda _e: self.on_sort_control_change())
+        self.sort_secondary_dir_btn = tk.Button(sort_row, text="升序 ↑", width=8, font=UI_FONT,
+                                                relief="flat", bg="#E2E8F0",
+                                                command=self.toggle_secondary_sort_dir)
         self.sort_secondary_dir_btn.pack(side="left", padx=(0, 8))
-        ctk.CTkButton(sort_row, text="清除次排序", width=90, height=28, fg_color="#94A3B8",
-                      hover_color="#64748B", command=self.clear_secondary_sort).pack(side="left", padx=(0, 12))
+        tk.Button(sort_row, text="清除次排序", width=10, font=UI_FONT, bg="#94A3B8", fg="white",
+                  relief="flat", command=self.clear_secondary_sort).pack(side="left", padx=(0, 12))
 
-        self.sort_status_label = ctk.CTkLabel(sort_row, text="排序：默认（决策优先级）", text_color="#64748B")
+        self.sort_status_label = tk.Label(sort_row, text="排序：默认（决策优先级）", font=UI_FONT, fg="#64748B")
         self.sort_status_label.pack(side="left")
 
         container_body = self._section(self.root, f"订柜状态监控（阈值 {CONTAINER_THRESHOLD:.0f} m³/柜）")
-        self.container_status_label = ctk.CTkLabel(container_body, text="等待分析...",
-                                                   font=ctk.CTkFont(size=13), text_color="#64748B",
-                                                   justify="left")
-        self.container_status_label.pack(anchor="w")
-        self.volume_detail_label = ctk.CTkLabel(container_body, text="",
-                                                font=ctk.CTkFont(size=11), text_color="#475569",
-                                                justify="left")
-        self.volume_detail_label.pack(anchor="w", pady=(6, 0))
+        self.container_status_label = tk.Label(container_body, text="等待分析...",
+                                               font=("Microsoft YaHei UI", 11), fg="#64748B", justify="left", anchor="w")
+        self.container_status_label.pack(fill="x")
+        self.volume_detail_label = tk.Label(container_body, text="", font=UI_FONT,
+                                            fg="#475569", justify="left", anchor="w")
+        self.volume_detail_label.pack(fill="x", pady=(6, 0))
 
-        table_section = ctk.CTkFrame(self.root, corner_radius=10)
+        table_section = ttk.LabelFrame(self.root, text="分析结果（点击表头排序，Shift+点击设次排序）",
+                                       style="Card.TLabelframe")
         table_section.pack(fill="both", expand=True, padx=16, pady=(0, 10))
-        ctk.CTkLabel(table_section, text="分析结果（点击表头排序，Shift+点击设次排序）",
-                     font=ctk.CTkFont(size=14, weight="bold"), text_color="#1E3A5F").pack(anchor="w", padx=14, pady=(10, 6))
 
         table_wrap = tk.Frame(table_section, bg="#F8FAFC")
-        table_wrap.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        table_wrap.pack(fill="both", expand=True, padx=4, pady=4)
 
         columns = ("SKU", "Name", "ProductFamily", "地区", "在库库存", "在途库存", "总量库存",
                    "8-30天", "15天", "30天", "采用需求", "需求来源",
@@ -338,10 +341,9 @@ class InventoryDecisionSystem:
         self.tree.tag_configure("no_sales", background="#F8FAFC", foreground="#94A3B8")
 
         summary_body = self._section(self.root, "汇总统计")
-        self.summary_label = ctk.CTkLabel(summary_body, text="等待分析...",
-                                          font=ctk.CTkFont(family="Consolas", size=11),
-                                          justify="left")
-        self.summary_label.pack(anchor="w")
+        self.summary_label = tk.Label(summary_body, text="等待分析...", font=UI_MONO_FONT,
+                                      justify="left", anchor="w")
+        self.summary_label.pack(fill="x")
 
     def toggle_help(self):
         if self.help_visible.get():
@@ -369,12 +371,12 @@ class InventoryDecisionSystem:
         try:
             channels = [d for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d))]
             channels.sort()
-            self.channel_combo.configure(values=channels)
+            self._set_combo_values(self.channel_combo, channels)
             if channels:
                 self.channel_combo.set(channels[0])
                 self.update_file_status()
             else:
-                self.file_status_label.configure(text="该目录下未找到子文件夹（渠道）", text_color="#DC2626")
+                self._set_label(self.file_status_label, "该目录下未找到子文件夹（渠道）", "#DC2626")
         except Exception as e:
             if not silent:
                 messagebox.showerror("错误", f"读取目录失败：{str(e)}")
@@ -393,8 +395,8 @@ class InventoryDecisionSystem:
             symbol = "✓" if exists else "✗"
             status_lines.append(f"{symbol} {f}")
             if not exists: all_ready = False
-        self.file_status_label.configure(text="  |  ".join(status_lines),
-                                         text_color="#16A34A" if all_ready else "#DC2626")
+        self._set_label(self.file_status_label, "  |  ".join(status_lines),
+                        "#16A34A" if all_ready else "#DC2626")
         return all_ready
 
     def on_family_selected(self, _value=None):
@@ -405,12 +407,12 @@ class InventoryDecisionSystem:
             return
         typed = self.filter_family.get().strip().lower()
         if not typed:
-            self.family_combo.configure(values=self.family_list)
+            self._set_combo_values(self.family_combo, self.family_list)
             return
         matches = [f for f in self.family_list if typed in f.lower()]
         if not matches:
             matches = self.family_list
-        self.family_combo.configure(values=matches)
+        self._set_combo_values(self.family_combo, matches)
         if len(matches) == 1 and matches[0] != "全部":
             self.filter_family.set(matches[0])
             self.refresh_display()
@@ -461,7 +463,7 @@ class InventoryDecisionSystem:
         self.filter_region.set("全部")
         self.filter_decision.set("全部")
         self.filter_family.set("全部")
-        self.family_combo.configure(values=self.family_list)
+        self._set_combo_values(self.family_combo, self.family_list)
         self.sort_primary = None
         self.sort_secondary = None
         self.sort_primary_asc = True
@@ -474,14 +476,14 @@ class InventoryDecisionSystem:
         self._sync_sort_controls()
         self._update_column_headers()
         if self.sort_primary is None:
-            self.sort_status_label.configure(text="排序：默认（决策优先级）", text_color="#64748B")
+            self.sort_status_label.configure(text="排序：默认（决策优先级）", fg="#64748B")
             return
         primary_text = f"{self._display_name_for_col(self.sort_primary)} {'↑' if self.sort_primary_asc else '↓'}"
         if self.sort_secondary:
             secondary_text = f"{self._display_name_for_col(self.sort_secondary)} {'↑' if self.sort_secondary_asc else '↓'}"
-            self.sort_status_label.configure(text=f"排序：{primary_text} → {secondary_text}", text_color="#2563EB")
+            self.sort_status_label.configure(text=f"排序：{primary_text} → {secondary_text}", fg="#2563EB")
         else:
-            self.sort_status_label.configure(text=f"排序：{primary_text}", text_color="#2563EB")
+            self.sort_status_label.configure(text=f"排序：{primary_text}", fg="#2563EB")
 
     def _update_column_headers(self):
         for col in self.column_display_names:
@@ -566,9 +568,9 @@ class InventoryDecisionSystem:
             msgs.append(f"南岛：{south_volume:.2f} m³（差 {threshold - south_volume:.2f} m³）")
 
         channel = self.channel.get() or "—"
-        self.container_status_label.configure(
-            text=f"[{channel}] {view_note}  " + "  |  ".join(msgs),
-            text_color="#DC2626" if (north_can or south_can) else "#334155")
+        self._set_label(self.container_status_label,
+                        f"[{channel}] {view_note}  " + "  |  ".join(msgs),
+                        "#DC2626" if (north_can or south_can) else "#334155")
 
         decision_stats = []
         for decision in ["下单备货", "催促发货", "保持现状", "暂无销售"]:
@@ -584,8 +586,9 @@ class InventoryDecisionSystem:
             else:
                 decision_stats.append(f"{decision} {len(subset)} 行")
 
-        self.volume_detail_label.configure(
-            text="各决策状态：" + "  |  ".join(decision_stats) + f"  |  合计备货体积：{total_volume:.3f} m³")
+        self._set_label(self.volume_detail_label,
+                        "各决策状态：" + "  |  ".join(decision_stats) + f"  |  合计备货体积：{total_volume:.3f} m³",
+                        "#475569")
 
     def refresh_display(self):
         if self.result_data is None:
@@ -642,10 +645,10 @@ class InventoryDecisionSystem:
         north_vol = order_df[order_df['Region'] == '北岛']['备货体积'].sum()
         south_vol = order_df[order_df['Region'] == '南岛']['备货体积'].sum()
         filter_hint = "（筛选视图）" if self._filters_active() else ""
-        self.summary_label.configure(
-            text=(f"当前显示：{len(df)} 行{filter_hint}  |  "
-                  f"需下单：{len(order_df)}  |  "
-                  f"备货体积：北岛 {north_vol:.3f} m³ / 南岛 {south_vol:.3f} m³ / 合计 {total_vol:.3f} m³"))
+        self._set_label(self.summary_label,
+                        (f"当前显示：{len(df)} 行{filter_hint}  |  "
+                         f"需下单：{len(order_df)}  |  "
+                         f"备货体积：北岛 {north_vol:.3f} m³ / 南岛 {south_vol:.3f} m³ / 合计 {total_vol:.3f} m³"))
 
     # ========== 自动扫描（轮询所有渠道） ==========
     def toggle_auto_scan(self):
@@ -665,8 +668,8 @@ class InventoryDecisionSystem:
 
     def start_auto_scan(self):
         self.auto_scanning = True
-        self.auto_btn.configure(text="停止自动扫描", fg_color="#DC2626", hover_color="#B91C1C")
-        self.auto_status.configure(text=f"运行中（每 {self.auto_scan_interval} 分钟扫描全部渠道）", text_color="#16A34A")
+        self.auto_btn.configure(text="停止自动扫描", bg="#DC2626")
+        self._set_label(self.auto_status, f"运行中（每 {self.auto_scan_interval} 分钟扫描全部渠道）", "#16A34A")
         self.scan_all_channels()
 
     def stop_auto_scan(self):
@@ -674,9 +677,9 @@ class InventoryDecisionSystem:
         if self.scan_job_id:
             self.root.after_cancel(self.scan_job_id)
             self.scan_job_id = None
-        self.auto_btn.configure(text="开始自动扫描", fg_color="#16A34A", hover_color="#15803D")
-        self.auto_status.configure(text="状态：已停止", text_color="#64748B")
-        self.summary_label.configure(text="自动扫描已停止")
+        self.auto_btn.configure(text="开始自动扫描", bg="#16A34A")
+        self._set_label(self.auto_status, "状态：已停止", "#64748B")
+        self._set_label(self.summary_label, "自动扫描已停止")
 
     def scan_all_channels(self):
         if not self.auto_scanning:
@@ -684,7 +687,7 @@ class InventoryDecisionSystem:
 
         data_dir = self.data_dir.get()
         if not data_dir or not os.path.exists(data_dir):
-            self.summary_label.configure(text="错误：数据根目录无效，扫描暂停")
+            self._set_label(self.summary_label, "错误：数据根目录无效，扫描暂停")
             self.stop_auto_scan()
             return
 
@@ -692,12 +695,12 @@ class InventoryDecisionSystem:
             all_channels = [d for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d))]
             all_channels.sort()
         except Exception as e:
-            self.summary_label.configure(text=f"读取渠道列表失败: {e}")
+            self._set_label(self.summary_label, f"读取渠道列表失败: {e}")
             self.stop_auto_scan()
             return
 
         if not all_channels:
-            self.summary_label.configure(text="未找到任何渠道文件夹")
+            self._set_label(self.summary_label, "未找到任何渠道文件夹")
             self.stop_auto_scan()
             return
 
@@ -710,8 +713,8 @@ class InventoryDecisionSystem:
             return
 
         if self._scan_channel_index >= len(self._all_channels):
-            self.summary_label.configure(
-                text=f"本轮扫描完成（共 {len(self._all_channels)} 个渠道），{self.auto_scan_interval} 分钟后开始下一轮...")
+            self._set_label(self.summary_label,
+                            f"本轮扫描完成（共 {len(self._all_channels)} 个渠道），{self.auto_scan_interval} 分钟后开始下一轮...")
             ms = self.auto_scan_interval * 60 * 1000
             self.scan_job_id = self.root.after(ms, self.scan_all_channels)
             return
@@ -726,8 +729,8 @@ class InventoryDecisionSystem:
             pass
 
         self.update_file_status()
-        self.summary_label.configure(
-            text=f"正在扫描 [{ch}] ({self._scan_channel_index + 1}/{len(self._all_channels)})...")
+        self._set_label(self.summary_label,
+                        f"正在扫描 [{ch}] ({self._scan_channel_index + 1}/{len(self._all_channels)})...")
         self.root.update_idletasks()
 
         success = self.run_analysis_core(silent=True, auto_export=True, channel_override=ch)
@@ -884,7 +887,7 @@ class InventoryDecisionSystem:
             families = sorted(stock_df['ProductFamily'].dropna().unique().tolist())
             families = [f for f in families if f]  # 去掉空值
             self.family_list = ["全部"] + families
-            self.family_combo.configure(values=self.family_list)
+            self._set_combo_values(self.family_combo, self.family_list)
             if self.filter_family.get() not in self.family_list:
                 self.filter_family.set("全部")
 
@@ -1065,8 +1068,8 @@ class InventoryDecisionSystem:
                             f"North:{north_volume:.2f}m³ South:{south_volume:.2f}m³ "
                             f"Archive:{timestamp}/\n")
 
-                self.summary_label.configure(
-                    text=f"[{target_channel}] 完成 | 归档: output/{target_channel}/{timestamp}/ | 截图+Excel+Charts")
+                self._set_label(self.summary_label,
+                                f"[{target_channel}] 完成 | 归档: output/{target_channel}/{timestamp}/ | 截图+Excel+Charts")
 
             if not silent:
                 archive_dir = os.path.join(self.default_output_dir, target_channel, timestamp)
@@ -1166,7 +1169,21 @@ class InventoryDecisionSystem:
         except Exception as e:
             messagebox.showerror("导出错误", f"导出失败：{str(e)}")
 
+def main():
+    try:
+        root = tk.Tk()
+        root.configure(bg="#F8FAFC")
+        app = InventoryDecisionSystem(root)
+        root.mainloop()
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        try:
+            messagebox.showerror("启动失败", f"程序无法启动：\n{e}")
+        except Exception:
+            print(f"程序无法启动：{e}")
+            input("按回车键退出...")
+
+
 if __name__ == "__main__":
-    root = ctk.CTk()
-    app = InventoryDecisionSystem(root)
-    root.mainloop()
+    main()
