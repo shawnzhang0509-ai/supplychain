@@ -2,4 +2,3 @@ pandas
 matplotlib
 Pillow
 openpyxl
-customtkinter
