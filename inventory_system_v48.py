@@ -21,7 +21,10 @@ plt.rcParams['axes.unicode_minus'] = False
 CONFIG_FILE = "inventory_config.json"
 CONTAINER_THRESHOLD = 69.0
 ERP_IMAGE_BASE = "https://ierpapi.ifurniture.co.nz/"
-IMAGE_PREVIEW_SIZE = (120, 120)
+IMAGE_THUMB_SIZE = (60, 60)
+TREE_ROW_HEIGHT = 68
+ERP_ROW_EVEN = "#FFFFFF"
+ERP_ROW_ODD = "#F0F4F8"
 
 COL_MAP = {
     "SKU": "Sku", "Name": "Name", "ProductFamily": "ProductFamily",
@@ -88,8 +91,9 @@ class InventoryDecisionSystem:
         self._family_popup_visible = False
         self._image_by_sku = {}
         self._image_cache = {}
-        self._image_photo = None
-        self._image_load_token = 0
+        self._row_photos = []
+        self._placeholder_photo = None
+        self._preload_status = ""
 
         self.auto_scanning = False
         self.scan_job_id = None
@@ -154,10 +158,10 @@ class InventoryDecisionSystem:
         style.configure("ERP.TLabelframe", padding=6, background=ERP_PANEL_BG, relief="flat", borderwidth=1)
         style.configure("ERP.TLabelframe.Label", background=ERP_PANEL_BG, foreground=ERP_TEXT, font=UI_FONT_BOLD)
         style.configure("ERP.Treeview",
-                        background=ERP_PANEL_BG,
+                        background=ERP_ROW_EVEN,
                         foreground=ERP_TEXT,
-                        fieldbackground=ERP_PANEL_BG,
-                        rowheight=26,
+                        fieldbackground=ERP_ROW_EVEN,
+                        rowheight=TREE_ROW_HEIGHT,
                         borderwidth=0,
                         font=UI_FONT)
         style.configure("ERP.Treeview.Heading",
@@ -375,23 +379,14 @@ class InventoryDecisionSystem:
         table_wrap.grid_columnconfigure(0, weight=1)
         table_wrap.grid_rowconfigure(0, weight=1)
 
-        preview_panel = tk.Frame(table_wrap, bg=ERP_PANEL_BG, width=140,
-                                 highlightbackground=ERP_BORDER, highlightthickness=1)
-        preview_panel.grid(row=0, column=1, rowspan=2, sticky="ns", padx=(6, 0))
-        preview_panel.grid_propagate(False)
-        self._lbl(preview_panel, "产品图", bold=True).pack(anchor="w", padx=8, pady=(8, 4))
-        self.image_preview_label = tk.Label(preview_panel, bg="#F8FAFC", width=16, height=8,
-                                          text="选中 SKU\n显示图片", fg=ERP_MUTED, relief="solid", borderwidth=1)
-        self.image_preview_label.pack(padx=8, pady=4)
-        self.image_sku_label = tk.Label(preview_panel, text="", font=UI_FONT_BOLD,
-                                        bg=ERP_PANEL_BG, fg=ERP_TEXT, wraplength=120, justify="left")
-        self.image_sku_label.pack(anchor="w", padx=8, pady=(0, 8))
-
         columns = ("SKU", "Name", "ProductFamily", "地区", "在库库存", "在途库存", "总量库存",
                    "8-30天", "15天", "30天", "采用需求", "需求来源",
                    "LT预估", "物流预估", "决策建议", "建议订货量", "体积系数", "备货体积", "催发货体积", "详细说明")
-        self.tree = ttk.Treeview(table_wrap, columns=columns, show="headings", height=16, style="ERP.Treeview")
+        self.tree = ttk.Treeview(table_wrap, columns=columns, show="tree headings",
+                                 height=12, style="ERP.Treeview")
         self.column_display_names = columns
+        self.tree.heading("#0", text="产品图")
+        self.tree.column("#0", width=72, stretch=False, anchor="center")
 
         col_widths = [78, 150, 88, 50, 62, 62, 62, 58, 58, 58, 68, 76, 72, 72, 82, 72, 68, 72, 76, 150]
         for col, width in zip(columns, col_widths):
@@ -403,13 +398,11 @@ class InventoryDecisionSystem:
         scrollbar_x = ttk.Scrollbar(table_wrap, orient="horizontal", command=self.tree.xview)
         self.tree.configure(yscrollcommand=scrollbar_y.set, xscrollcommand=scrollbar_x.set)
         self.tree.grid(row=0, column=0, sticky="nsew")
-        scrollbar_y.grid(row=0, column=2, sticky="ns")
+        scrollbar_y.grid(row=0, column=1, sticky="ns")
         scrollbar_x.grid(row=1, column=0, sticky="ew")
-        self.tree.bind("<<TreeviewSelect>>", self.on_row_select)
-        table_wrap.grid_columnconfigure(0, weight=1)
-        table_wrap.grid_rowconfigure(0, weight=1)
 
-        self.tree.tag_configure("row", background=ERP_PANEL_BG, foreground=ERP_TEXT)
+        self.tree.tag_configure("even", background=ERP_ROW_EVEN, foreground=ERP_TEXT)
+        self.tree.tag_configure("odd", background=ERP_ROW_ODD, foreground=ERP_TEXT)
 
         footer = tk.Frame(self.root, bg=ERP_PANEL_BG, highlightbackground=ERP_BORDER, highlightthickness=1)
         footer.pack(fill="x", padx=8, pady=(0, 8))
@@ -420,7 +413,7 @@ class InventoryDecisionSystem:
         self.help_visible = tk.BooleanVar(value=False)
         self.help_frame = tk.Frame(self.root, bg=ERP_PANEL_BG, highlightbackground=ERP_BORDER, highlightthickness=1)
         help_text = (
-            "数据：stock.csv 需含 ImageUrl 列  |  点击行或分析后自动预加载产品图  |  Family 支持模糊搜索"
+            "数据：stock.csv 需含 ImageUrl  |  分析后自动预加载，产品图显示在表格每行首列"
         )
         self.help_label = tk.Label(self.help_frame, text=help_text, justify="left",
                                    font=UI_FONT, fg=ERP_MUTED, bg=ERP_PANEL_BG)
@@ -464,6 +457,18 @@ class InventoryDecisionSystem:
             if url:
                 self._image_by_sku[str(row['Sku'])] = url
 
+    def _get_placeholder_photo(self):
+        if self._placeholder_photo is None:
+            img = Image.new("RGB", IMAGE_THUMB_SIZE, "#E2E8F0")
+            self._placeholder_photo = ImageTk.PhotoImage(img)
+        return self._placeholder_photo
+
+    def _photo_for_sku(self, sku):
+        url = self._image_by_sku.get(str(sku), "")
+        if url and url in self._image_cache:
+            return self._image_cache[url]
+        return self._get_placeholder_photo()
+
     def _download_image_photo(self, url):
         if url in self._image_cache:
             return self._image_cache[url]
@@ -472,7 +477,7 @@ class InventoryDecisionSystem:
             with urlopen(req, timeout=12) as resp:
                 data = resp.read()
             img = Image.open(io.BytesIO(data))
-            img.thumbnail(IMAGE_PREVIEW_SIZE, getattr(Image, "Resampling", Image).LANCZOS)
+            img.thumbnail(IMAGE_THUMB_SIZE, getattr(Image, "Resampling", Image).LANCZOS)
             photo = ImageTk.PhotoImage(img)
             self._image_cache[url] = photo
             return photo
@@ -485,7 +490,7 @@ class InventoryDecisionSystem:
             return
 
         total = len(urls)
-        self._set_label(self.image_sku_label, f"预加载图片 0/{total}")
+        self._preload_status = f"正在预加载产品图 0/{total}..."
 
         def worker():
             loaded = 0
@@ -495,79 +500,15 @@ class InventoryDecisionSystem:
                 loaded += 1
                 if loaded % 5 == 0 or loaded == total:
                     n = loaded
-                    self.root.after(0, lambda n=n: self._set_label(
-                        self.image_sku_label, f"预加载图片 {n}/{total}"))
+                    self._preload_status = f"正在预加载产品图 {n}/{total}..."
 
             def done():
-                children = self.tree.get_children()
-                if children:
-                    self.tree.selection_set(children[0])
-                    self.tree.focus(children[0])
-                    self.on_row_select()
-                else:
-                    self._clear_image_preview()
+                self._preload_status = ""
+                self.refresh_display()
 
             self.root.after(0, done)
 
         threading.Thread(target=worker, daemon=True).start()
-
-    def _clear_image_preview(self, text="选中 SKU\n显示图片"):
-        self._image_photo = None
-        self.image_preview_label.configure(image='', text=text)
-        self.image_sku_label.configure(text="")
-
-    def _show_image_preview(self, photo, sku, name=""):
-        self._image_photo = photo
-        self.image_preview_label.configure(image=photo, text="")
-        title = sku
-        if name:
-            title += f"\n{name[:28]}"
-        self.image_sku_label.configure(text=title)
-
-    def _load_image_preview(self, sku):
-        url = self._image_by_sku.get(str(sku), "")
-        if not url:
-            self._clear_image_preview("暂无图片")
-            self.image_sku_label.configure(text=str(sku))
-            return
-
-        if url in self._image_cache:
-            self._show_image_preview(self._image_cache[url], sku)
-            return
-
-        self._image_load_token += 1
-        token = self._image_load_token
-        self._clear_image_preview("加载中...")
-        self.image_sku_label.configure(text=str(sku))
-
-        def worker():
-            photo = self._download_image_photo(url)
-
-            def apply():
-                if token != self._image_load_token:
-                    return
-                if photo:
-                    self._show_image_preview(photo, sku)
-                else:
-                    self._clear_image_preview("图片加载失败")
-                    self.image_sku_label.configure(text=str(sku))
-
-            self.root.after(0, apply)
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def on_row_select(self, _event=None):
-        sel = self.tree.selection()
-        if not sel:
-            return
-        values = self.tree.item(sel[0], "values")
-        if not values:
-            return
-        sku = values[0]
-        name = values[1] if len(values) > 1 else ""
-        self._load_image_preview(sku)
-        if name:
-            self.image_sku_label.configure(text=f"{sku}\n{name[:28]}")
 
     def select_data_dir(self):
         folder = filedialog.askdirectory()
@@ -867,6 +808,7 @@ class InventoryDecisionSystem:
     def refresh_display(self):
         if self.result_data is None:
             return
+        self._row_photos = []
         for item in self.tree.get_children():
             self.tree.delete(item)
 
@@ -889,7 +831,7 @@ class InventoryDecisionSystem:
             except Exception:
                 pass
 
-        for _, row in df.iterrows():
+        for idx, (_, row) in enumerate(df.iterrows()):
             values = (
                 row['Sku'], row['Name'], row['ProductFamily'], row['Region'],
                 f"{row['在库库存']:.0f}", f"{row['在途库存']:.0f}",
@@ -902,7 +844,10 @@ class InventoryDecisionSystem:
                 f"{row['催发货体积']:.4f}" if row['催发货体积'] > 0 else "-",
                 row['详细说明']
             )
-            self.tree.insert("", "end", values=values, tags=("row",))
+            photo = self._photo_for_sku(row['Sku'])
+            self._row_photos.append(photo)
+            row_tag = "even" if idx % 2 == 0 else "odd"
+            self.tree.insert("", "end", text="", image=photo, values=values, tags=(row_tag,))
 
         self.update_volume_displays(df)
 
@@ -915,13 +860,14 @@ class InventoryDecisionSystem:
         north_expedite = expedite_df[expedite_df['Region'] == '北岛']['催发货体积'].sum()
         south_expedite = expedite_df[expedite_df['Region'] == '南岛']['催发货体积'].sum()
         filter_hint = "（筛选视图）" if self._filters_active() else ""
-        self._set_label(self.summary_label,
-                        (f"当前显示：{len(df)} 行{filter_hint}  |  "
-                         f"需下单：{len(order_df)}  |  需催发：{len(expedite_df)}  |  "
-                         f"备货体积：北岛 {north_order:.3f} / 南岛 {south_order:.3f} / 合计 {total_order:.3f} m³  |  "
-                         f"催发体积：北岛 {north_expedite:.3f} / 南岛 {south_expedite:.3f} / 合计 {total_expedite:.3f} m³"))
-
-        self._preload_images_async()
+        preload_hint = getattr(self, "_preload_status", "")
+        summary = (f"当前显示：{len(df)} 行{filter_hint}  |  "
+                   f"需下单：{len(order_df)}  |  需催发：{len(expedite_df)}  |  "
+                   f"备货体积：北岛 {north_order:.3f} / 南岛 {south_order:.3f} / 合计 {total_order:.3f} m³  |  "
+                   f"催发体积：北岛 {north_expedite:.3f} / 南岛 {south_expedite:.3f} / 合计 {total_expedite:.3f} m³")
+        if preload_hint:
+            summary += f"  |  {preload_hint}"
+        self._set_label(self.summary_label, summary)
 
     # ========== 自动扫描（轮询所有渠道） ==========
     def toggle_auto_scan(self):
@@ -1310,14 +1256,15 @@ class InventoryDecisionSystem:
             df = df.sort_values(['优先级', 'Sku'])
 
             self.result_data = df
+            self._image_cache = {}
             self._update_image_lookup(df)
-            self._clear_image_preview()
             self.sort_primary = None
             self.sort_secondary = None
             self.sort_primary_asc = True
             self.sort_secondary_asc = True
             self.update_sort_status()
             self.refresh_display()
+            self._preload_images_async()
 
             order_df = df[df['决策建议'] == '下单备货']
             north_volume = order_df[order_df['Region'] == '北岛']['备货体积'].sum()
