@@ -28,7 +28,7 @@ ERP_ROW_ODD = "#F0F4F8"
 
 COL_MAP = {
     "SKU": "Sku", "Name": "Name", "ProductFamily": "ProductFamily",
-    "地区": "Region", "在库库存": "在库库存", "在途库存": "在途库存",
+    "地区": "Region", "在库库存": "在库库存", "在途库存": "在途库存", "在产库存": "在产库存",
     "总量库存": "总量库存", "8-30天": "需求_8_30天", "15天": "需求_15天", "30天": "需求_30天",
     "采用需求": "日均需求", "需求来源": "需求来源", "LT预估": "LT预估", "物流预估": "物流预估",
     "决策建议": "决策建议", "建议订货量": "建议订货量", "体积系数": "PriceRadarVolume",
@@ -379,7 +379,7 @@ class InventoryDecisionSystem:
         table_wrap.grid_columnconfigure(0, weight=1)
         table_wrap.grid_rowconfigure(0, weight=1)
 
-        columns = ("SKU", "Name", "ProductFamily", "地区", "在库库存", "在途库存", "总量库存",
+        columns = ("SKU", "Name", "ProductFamily", "地区", "在库库存", "在途库存", "在产库存", "总量库存",
                    "8-30天", "15天", "30天", "采用需求", "需求来源",
                    "LT预估", "物流预估", "决策建议", "建议订货量", "体积系数", "备货体积", "催发货体积", "详细说明")
         self.tree = ttk.Treeview(table_wrap, columns=columns, show="tree headings",
@@ -388,7 +388,7 @@ class InventoryDecisionSystem:
         self.tree.heading("#0", text="产品图")
         self.tree.column("#0", width=72, stretch=False, anchor="center")
 
-        col_widths = [78, 150, 88, 50, 62, 62, 62, 58, 58, 58, 68, 76, 72, 72, 82, 72, 68, 72, 76, 150]
+        col_widths = [78, 150, 88, 50, 62, 62, 62, 62, 58, 58, 58, 68, 76, 72, 72, 82, 72, 68, 72, 76, 150]
         for col, width in zip(columns, col_widths):
             self.tree.heading(col, text=col, command=lambda c=col: self.on_header_click(c))
             anchor = "w" if col in ("Name", "详细说明", "ProductFamily") else "center"
@@ -413,7 +413,8 @@ class InventoryDecisionSystem:
         self.help_visible = tk.BooleanVar(value=False)
         self.help_frame = tk.Frame(self.root, bg=ERP_PANEL_BG, highlightbackground=ERP_BORDER, highlightthickness=1)
         help_text = (
-            "数据：stock.csv 需含 ImageUrl  |  分析后自动预加载，产品图显示在表格每行首列"
+            "数据：stock.csv 需含 ImageUrl  |  PO.csv：无 ContainerNumber=在产，有 ContainerNumber 且未入库=在途  |  "
+            "催促发货仅在现货≤物流预估且有在途库存时触发"
         )
         self.help_label = tk.Label(self.help_frame, text=help_text, justify="left",
                                    font=UI_FONT, fg=ERP_MUTED, bg=ERP_PANEL_BG)
@@ -834,7 +835,7 @@ class InventoryDecisionSystem:
         for idx, (_, row) in enumerate(df.iterrows()):
             values = (
                 row['Sku'], row['Name'], row['ProductFamily'], row['Region'],
-                f"{row['在库库存']:.0f}", f"{row['在途库存']:.0f}",
+                f"{row['在库库存']:.0f}", f"{row['在途库存']:.0f}", f"{row['在产库存']:.0f}",
                 f"{row['总量库存']:.0f}", f"{row['需求_8_30天']:.3f}", f"{row['需求_15天']:.3f}",
                 f"{row['需求_30天']:.3f}", f"{row['日均需求']:.3f}", row['需求来源'],
                 f"{row['LT预估']:.1f}", f"{row['物流预估']:.1f}", row['决策建议'],
@@ -1122,17 +1123,25 @@ class InventoryDecisionSystem:
                         messagebox.showerror("错误", f"{name}.csv 缺少字段：AvgDailyDemand_3Checkins_Avg")
                     return False
 
-            def is_in_transit(val):
+            def _is_empty_value(val):
                 if pd.isna(val):
                     return True
                 val_str = str(val).strip().lower()
                 return val_str in ('', 'nan', 'nat', 'none', 'null')
 
-            po_df['IsInTransit'] = po_df['CheckinDate'].apply(is_in_transit)
-            transit_rows = po_df[po_df['IsInTransit']]
+            po_df['NotCheckedIn'] = po_df['CheckinDate'].apply(_is_empty_value)
+            if 'ContainerNumber' in po_df.columns:
+                po_df['HasContainer'] = po_df['ContainerNumber'].apply(lambda v: not _is_empty_value(v))
+                transit_rows = po_df[po_df['NotCheckedIn'] & po_df['HasContainer']]
+                production_rows = po_df[po_df['NotCheckedIn'] & ~po_df['HasContainer']]
+            else:
+                transit_rows = po_df[po_df['NotCheckedIn']]
+                production_rows = po_df.iloc[0:0]
 
             in_transit = transit_rows.groupby(['Sku', 'Region'])['QuantityOrdered'].sum().reset_index()
             in_transit.rename(columns={'QuantityOrdered': '在途库存'}, inplace=True)
+            in_production = production_rows.groupby(['Sku', 'Region'])['QuantityOrdered'].sum().reset_index()
+            in_production.rename(columns={'QuantityOrdered': '在产库存'}, inplace=True)
 
             all_skus = pd.concat([
                 stock_df[['Sku', 'Region']],
@@ -1152,10 +1161,12 @@ class InventoryDecisionSystem:
             df = pd.merge(all_skus, stock_df[merge_cols], 
                           on=['Sku', 'Region'], how='left')
             df = pd.merge(df, in_transit, on=['Sku', 'Region'], how='left')
+            df = pd.merge(df, in_production, on=['Sku', 'Region'], how='left')
 
             df['在途库存'] = df['在途库存'].fillna(0)
+            df['在产库存'] = df['在产库存'].fillna(0)
             df['在库库存'] = df['在库库存'].fillna(0)
-            df['总量库存'] = df['在库库存'] + df['在途库存']
+            df['总量库存'] = df['在库库存'] + df['在途库存'] + df['在产库存']
             df['PriceRadarVolume'] = df['PriceRadarVolume'].fillna(0)
             df['IsDiscontinued'] = df['IsDiscontinued'].fillna(0).astype(int)
             if 'Name' in df.columns:
@@ -1216,6 +1227,7 @@ class InventoryDecisionSystem:
                 total = row['总量库存']
                 in_stock = row['在库库存']
                 transit = row['在途库存']
+                production = row['在产库存']
                 daily = row['日均需求']
                 lt_need = row['LT预估']
                 log_need = row['物流预估']
@@ -1223,13 +1235,14 @@ class InventoryDecisionSystem:
                 price_vol = row['PriceRadarVolume']
 
                 if daily == 0:
-                    return "暂无销售", 0, 0, f"无销售记录，当前库存: 现货{in_stock:.0f}+在途{transit:.0f}"
+                    return ("暂无销售", 0, 0,
+                            f"无销售记录，当前库存: 现货{in_stock:.0f}+在途{transit:.0f}+在产{production:.0f}")
                 if total <= lt_need:
                     order_qty = max(0, lt_need - total)
                     order_vol = order_qty * price_vol
                     return ("下单备货", order_qty, order_vol,
                            f"总库存{total:.0f}≤{lt_days}天需求({lt_need:.1f})，缺口{order_qty:.0f}，体积{order_vol:.4f}m³，基于{source}")
-                elif in_stock <= log_need:
+                elif in_stock <= log_need and transit > 0:
                     days = in_stock / daily
                     expedite_vol = transit * price_vol
                     return ("催促发货", 0, 0,
@@ -1237,8 +1250,12 @@ class InventoryDecisionSystem:
                            f"需催{transit:.0f}件到港，催发货体积{expedite_vol:.4f}m³")
                 else:
                     days = total / daily
+                    if in_stock <= log_need and production > 0:
+                        return ("保持现状", 0, 0,
+                               f"现货{in_stock:.0f}≤{log_days}天需求({log_need:.1f})，无在途可催，"
+                               f"在产{production:.0f}件未到柜，总库存可撑{days:.0f}天")
                     return ("保持现状", 0, 0,
-                           f"库存充足(现货{in_stock:.0f}+在途{transit:.0f})，基于{source}可撑{days:.0f}天")
+                           f"库存充足(现货{in_stock:.0f}+在途{transit:.0f}+在产{production:.0f})，基于{source}可撑{days:.0f}天")
 
             decisions = df.apply(decide, axis=1)
             df['决策建议'] = [d[0] for d in decisions]
@@ -1359,12 +1376,12 @@ class InventoryDecisionSystem:
         if 'ImageUrl' not in data.columns:
             data = data.copy()
             data['ImageUrl'] = ''
-        cols = ['Sku', 'Name', 'ProductFamily', 'Region', '在库库存', '在途库存', '总量库存',
+        cols = ['Sku', 'Name', 'ProductFamily', 'Region', '在库库存', '在途库存', '在产库存', '总量库存',
                '需求_8_30天', '需求_15天', '需求_30天', '日均需求', '需求来源',
                'LT预估', '物流预估', '决策建议', '建议订货量', 'PriceRadarVolume', '备货体积', '催发货体积', 'ImageUrl', '详细说明']
 
         export_df = data[cols].copy()
-        export_df.columns = ['SKU', 'Name', 'ProductFamily', '地区', '在库库存', '在途库存', '总量库存',
+        export_df.columns = ['SKU', 'Name', 'ProductFamily', '地区', '在库库存', '在途库存', '在产库存', '总量库存',
                            '8-30天日均', '15天日均', '30天日均', '采用日均需求', '需求来源',
                            'LeadTime周期需求', '物流周期需求', '决策建议', '建议订货量', '体积系数',
                            '备货体积(m³)', '催发货体积(m³)', 'ImageUrl', '详细说明']
