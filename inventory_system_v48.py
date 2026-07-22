@@ -420,8 +420,7 @@ class InventoryDecisionSystem:
         self.help_visible = tk.BooleanVar(value=False)
         self.help_frame = tk.Frame(self.root, bg=ERP_PANEL_BG, highlightbackground=ERP_BORDER, highlightthickness=1)
         help_text = (
-            "数据：stock.csv / PO.csv / Sales 8-30.csv / Sales 15.csv / Sales 30.csv  |  "
-            "备货体积=下单缺口×系数  |  催发体积=在途×系数  |  Family 支持模糊搜索（如 win→Winston）"
+            "数据：stock.csv 需含 ImageUrl 列  |  点击行或分析后自动预加载产品图  |  Family 支持模糊搜索"
         )
         self.help_label = tk.Label(self.help_frame, text=help_text, justify="left",
                                    font=UI_FONT, fg=ERP_MUTED, bg=ERP_PANEL_BG)
@@ -465,6 +464,53 @@ class InventoryDecisionSystem:
             if url:
                 self._image_by_sku[str(row['Sku'])] = url
 
+    def _download_image_photo(self, url):
+        if url in self._image_cache:
+            return self._image_cache[url]
+        try:
+            req = Request(url, headers={"User-Agent": "InventoryDecisionSystem/4.8"})
+            with urlopen(req, timeout=12) as resp:
+                data = resp.read()
+            img = Image.open(io.BytesIO(data))
+            img.thumbnail(IMAGE_PREVIEW_SIZE, getattr(Image, "Resampling", Image).LANCZOS)
+            photo = ImageTk.PhotoImage(img)
+            self._image_cache[url] = photo
+            return photo
+        except Exception:
+            return None
+
+    def _preload_images_async(self):
+        urls = list({u for u in self._image_by_sku.values() if u})
+        if not urls:
+            return
+
+        total = len(urls)
+        self._set_label(self.image_sku_label, f"预加载图片 0/{total}")
+
+        def worker():
+            loaded = 0
+            for url in urls:
+                if url not in self._image_cache:
+                    self._download_image_photo(url)
+                loaded += 1
+                if loaded % 5 == 0 or loaded == total:
+                    n = loaded
+                    self.root.after(0, lambda n=n: self._set_label(
+                        self.image_sku_label, f"预加载图片 {n}/{total}"))
+
+            def done():
+                children = self.tree.get_children()
+                if children:
+                    self.tree.selection_set(children[0])
+                    self.tree.focus(children[0])
+                    self.on_row_select()
+                else:
+                    self._clear_image_preview()
+
+            self.root.after(0, done)
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def _clear_image_preview(self, text="选中 SKU\n显示图片"):
         self._image_photo = None
         self.image_preview_label.configure(image='', text=text)
@@ -495,17 +541,7 @@ class InventoryDecisionSystem:
         self.image_sku_label.configure(text=str(sku))
 
         def worker():
-            photo = None
-            try:
-                req = Request(url, headers={"User-Agent": "InventoryDecisionSystem/4.8"})
-                with urlopen(req, timeout=12) as resp:
-                    data = resp.read()
-                img = Image.open(io.BytesIO(data))
-                img.thumbnail(IMAGE_PREVIEW_SIZE, getattr(Image, "Resampling", Image).LANCZOS)
-                photo = ImageTk.PhotoImage(img)
-                self._image_cache[url] = photo
-            except Exception:
-                photo = None
+            photo = self._download_image_photo(url)
 
             def apply():
                 if token != self._image_load_token:
@@ -884,6 +920,8 @@ class InventoryDecisionSystem:
                          f"需下单：{len(order_df)}  |  需催发：{len(expedite_df)}  |  "
                          f"备货体积：北岛 {north_order:.3f} / 南岛 {south_order:.3f} / 合计 {total_order:.3f} m³  |  "
                          f"催发体积：北岛 {north_expedite:.3f} / 南岛 {south_expedite:.3f} / 合计 {total_expedite:.3f} m³"))
+
+        self._preload_images_async()
 
     # ========== 自动扫描（轮询所有渠道） ==========
     def toggle_auto_scan(self):
