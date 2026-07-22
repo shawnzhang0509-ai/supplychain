@@ -2,13 +2,17 @@ import pandas as pd
 import os
 import json
 import sys
+import io
+import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from datetime import datetime
+from urllib.parse import quote, urlsplit, urlunsplit
+from urllib.request import Request, urlopen
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from PIL import ImageGrab
+from PIL import Image, ImageGrab, ImageTk
 
 # ========== 中文字体修复 ==========
 plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS', 'DejaVu Sans']
@@ -16,6 +20,8 @@ plt.rcParams['axes.unicode_minus'] = False
 
 CONFIG_FILE = "inventory_config.json"
 CONTAINER_THRESHOLD = 69.0
+ERP_IMAGE_BASE = "https://ierpapi.ifurniture.co.nz/"
+IMAGE_PREVIEW_SIZE = (120, 120)
 
 COL_MAP = {
     "SKU": "Sku", "Name": "Name", "ProductFamily": "ProductFamily",
@@ -80,6 +86,10 @@ class InventoryDecisionSystem:
         self.result_data = None
         self.family_list = ["全部"]
         self._family_popup_visible = False
+        self._image_by_sku = {}
+        self._image_cache = {}
+        self._image_photo = None
+        self._image_load_token = 0
 
         self.auto_scanning = False
         self.scan_job_id = None
@@ -362,6 +372,20 @@ class InventoryDecisionSystem:
 
         table_wrap = self._frame(table_section)
         table_wrap.pack(fill="both", expand=True, padx=6, pady=(0, 6))
+        table_wrap.grid_columnconfigure(0, weight=1)
+        table_wrap.grid_rowconfigure(0, weight=1)
+
+        preview_panel = tk.Frame(table_wrap, bg=ERP_PANEL_BG, width=140,
+                                 highlightbackground=ERP_BORDER, highlightthickness=1)
+        preview_panel.grid(row=0, column=1, rowspan=2, sticky="ns", padx=(6, 0))
+        preview_panel.grid_propagate(False)
+        self._lbl(preview_panel, "产品图", bold=True).pack(anchor="w", padx=8, pady=(8, 4))
+        self.image_preview_label = tk.Label(preview_panel, bg="#F8FAFC", width=16, height=8,
+                                          text="选中 SKU\n显示图片", fg=ERP_MUTED, relief="solid", borderwidth=1)
+        self.image_preview_label.pack(padx=8, pady=4)
+        self.image_sku_label = tk.Label(preview_panel, text="", font=UI_FONT_BOLD,
+                                        bg=ERP_PANEL_BG, fg=ERP_TEXT, wraplength=120, justify="left")
+        self.image_sku_label.pack(anchor="w", padx=8, pady=(0, 8))
 
         columns = ("SKU", "Name", "ProductFamily", "地区", "在库库存", "在途库存", "总量库存",
                    "8-30天", "15天", "30天", "采用需求", "需求来源",
@@ -379,10 +403,11 @@ class InventoryDecisionSystem:
         scrollbar_x = ttk.Scrollbar(table_wrap, orient="horizontal", command=self.tree.xview)
         self.tree.configure(yscrollcommand=scrollbar_y.set, xscrollcommand=scrollbar_x.set)
         self.tree.grid(row=0, column=0, sticky="nsew")
-        scrollbar_y.grid(row=0, column=1, sticky="ns")
+        scrollbar_y.grid(row=0, column=2, sticky="ns")
         scrollbar_x.grid(row=1, column=0, sticky="ew")
-        table_wrap.grid_rowconfigure(0, weight=1)
+        self.tree.bind("<<TreeviewSelect>>", self.on_row_select)
         table_wrap.grid_columnconfigure(0, weight=1)
+        table_wrap.grid_rowconfigure(0, weight=1)
 
         self.tree.tag_configure("row", background=ERP_PANEL_BG, foreground=ERP_TEXT)
 
@@ -409,6 +434,104 @@ class InventoryDecisionSystem:
         else:
             self.help_frame.pack(fill="x", padx=8, pady=(0, 4), before=self.summary_label.master)
             self.help_visible.set(True)
+
+    def _normalize_image_url(self, url):
+        if url is None or (isinstance(url, float) and pd.isna(url)):
+            return ""
+        url = str(url).strip()
+        if not url:
+            return ""
+        if not url.lower().startswith("http"):
+            url = ERP_IMAGE_BASE + url.replace("\\", "/").lstrip("/")
+        parts = urlsplit(url)
+        path = quote(parts.path, safe="/:%")
+        return urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))
+
+    def _build_image_url_column(self, stock_wide):
+        if 'ImageUrl' in stock_wide.columns:
+            return stock_wide['ImageUrl'].fillna('').astype(str).str.strip()
+        if 'ImagePath' in stock_wide.columns:
+            return stock_wide['ImagePath'].apply(
+                lambda p: self._normalize_image_url(p) if pd.notna(p) and str(p).strip() else ""
+            )
+        return pd.Series([''] * len(stock_wide), index=stock_wide.index)
+
+    def _update_image_lookup(self, df):
+        self._image_by_sku = {}
+        if df is None or 'ImageUrl' not in df.columns:
+            return
+        for _, row in df.drop_duplicates(subset=['Sku']).iterrows():
+            url = self._normalize_image_url(row.get('ImageUrl', ''))
+            if url:
+                self._image_by_sku[str(row['Sku'])] = url
+
+    def _clear_image_preview(self, text="选中 SKU\n显示图片"):
+        self._image_photo = None
+        self.image_preview_label.configure(image='', text=text)
+        self.image_sku_label.configure(text="")
+
+    def _show_image_preview(self, photo, sku, name=""):
+        self._image_photo = photo
+        self.image_preview_label.configure(image=photo, text="")
+        title = sku
+        if name:
+            title += f"\n{name[:28]}"
+        self.image_sku_label.configure(text=title)
+
+    def _load_image_preview(self, sku):
+        url = self._image_by_sku.get(str(sku), "")
+        if not url:
+            self._clear_image_preview("暂无图片")
+            self.image_sku_label.configure(text=str(sku))
+            return
+
+        if url in self._image_cache:
+            self._show_image_preview(self._image_cache[url], sku)
+            return
+
+        self._image_load_token += 1
+        token = self._image_load_token
+        self._clear_image_preview("加载中...")
+        self.image_sku_label.configure(text=str(sku))
+
+        def worker():
+            photo = None
+            try:
+                req = Request(url, headers={"User-Agent": "InventoryDecisionSystem/4.8"})
+                with urlopen(req, timeout=12) as resp:
+                    data = resp.read()
+                img = Image.open(io.BytesIO(data))
+                img.thumbnail(IMAGE_PREVIEW_SIZE, getattr(Image, "Resampling", Image).LANCZOS)
+                photo = ImageTk.PhotoImage(img)
+                self._image_cache[url] = photo
+            except Exception:
+                photo = None
+
+            def apply():
+                if token != self._image_load_token:
+                    return
+                if photo:
+                    self._show_image_preview(photo, sku)
+                else:
+                    self._clear_image_preview("图片加载失败")
+                    self.image_sku_label.configure(text=str(sku))
+
+            self.root.after(0, apply)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def on_row_select(self, _event=None):
+        sel = self.tree.selection()
+        if not sel:
+            return
+        values = self.tree.item(sel[0], "values")
+        if not values:
+            return
+        sku = values[0]
+        name = values[1] if len(values) > 1 else ""
+        self._load_image_preview(sku)
+        if name:
+            self.image_sku_label.configure(text=f"{sku}\n{name[:28]}")
 
     def select_data_dir(self):
         folder = filedialog.askdirectory()
@@ -959,13 +1082,14 @@ class InventoryDecisionSystem:
                 return False
 
             stock_wide = pd.read_csv(stock_path)
+            stock_wide['ImageUrl'] = self._build_image_url_column(stock_wide)
 
             # 检查新格式：包含 Name 和 ProductFamily
             has_name = 'Name' in stock_wide.columns
             has_family = 'ProductFamily' in stock_wide.columns
 
             if 'SouthIslandStock' in stock_wide.columns and 'NorthIslandStock' in stock_wide.columns:
-                id_vars = ['Sku', 'PriceRadarVolume', 'IsDiscontinued']
+                id_vars = ['Sku', 'PriceRadarVolume', 'IsDiscontinued', 'ImageUrl']
                 if has_name:
                     id_vars.append('Name')
                 if has_family:
@@ -1035,7 +1159,7 @@ class InventoryDecisionSystem:
             ], ignore_index=True).drop_duplicates()
 
             # 合并时保留 Name 和 ProductFamily
-            merge_cols = ['Sku', 'Region', '在库库存', 'PriceRadarVolume', 'IsDiscontinued']
+            merge_cols = ['Sku', 'Region', '在库库存', 'PriceRadarVolume', 'IsDiscontinued', 'ImageUrl']
             if 'Name' in stock_df.columns:
                 merge_cols.append('Name')
             if 'ProductFamily' in stock_df.columns:
@@ -1058,6 +1182,10 @@ class InventoryDecisionSystem:
                 df['ProductFamily'] = df['ProductFamily'].fillna('')
             else:
                 df['ProductFamily'] = ''
+            if 'ImageUrl' in df.columns:
+                df['ImageUrl'] = df['ImageUrl'].fillna('').astype(str).str.strip()
+            else:
+                df['ImageUrl'] = ''
 
             s8 = sales_8_30_df.groupby(['Sku', 'Region'])['AvgDailyDemand_3Checkins_Avg'].mean().reset_index()
             s8.rename(columns={'AvgDailyDemand_3Checkins_Avg': '需求_8_30天'}, inplace=True)
@@ -1144,6 +1272,8 @@ class InventoryDecisionSystem:
             df = df.sort_values(['优先级', 'Sku'])
 
             self.result_data = df
+            self._update_image_lookup(df)
+            self._clear_image_preview()
             self.sort_primary = None
             self.sort_secondary = None
             self.sort_primary_asc = True
@@ -1241,15 +1371,18 @@ class InventoryDecisionSystem:
         data = df if df is not None else self.result_data
         if data is None:
             return False
-        cols = ['Sku', 'Name', 'ProductFamily', 'Region', '在库库存', '在途库存', '总量库存', 
+        if 'ImageUrl' not in data.columns:
+            data = data.copy()
+            data['ImageUrl'] = ''
+        cols = ['Sku', 'Name', 'ProductFamily', 'Region', '在库库存', '在途库存', '总量库存',
                '需求_8_30天', '需求_15天', '需求_30天', '日均需求', '需求来源',
-               'LT预估', '物流预估', '决策建议', '建议订货量', 'PriceRadarVolume', '备货体积', '催发货体积', '详细说明']
+               'LT预估', '物流预估', '决策建议', '建议订货量', 'PriceRadarVolume', '备货体积', '催发货体积', 'ImageUrl', '详细说明']
 
         export_df = data[cols].copy()
         export_df.columns = ['SKU', 'Name', 'ProductFamily', '地区', '在库库存', '在途库存', '总量库存',
                            '8-30天日均', '15天日均', '30天日均', '采用日均需求', '需求来源',
                            'LeadTime周期需求', '物流周期需求', '决策建议', '建议订货量', '体积系数',
-                           '备货体积(m³)', '催发货体积(m³)', '详细说明']
+                           '备货体积(m³)', '催发货体积(m³)', 'ImageUrl', '详细说明']
 
         with pd.ExcelWriter(filename, engine='openpyxl') as writer:
             export_df.to_excel(writer, index=False, sheet_name='库存决策分析')
