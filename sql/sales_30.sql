@@ -1,33 +1,15 @@
--- ============================================================
--- Sales 30 导出 SQL（修订版）
--- 占位符：{sku} = 渠道前缀，如 918
---
--- 取样逻辑：入库后第1天 ~ 第30天（未满周期则到今天），含首尾
---   例：7/2 入库，今天 7/23 → 取样 7/3~7/23，共 21 天
---
--- 修订要点（与 Sales 8-30 一致）：
--- 1. 销量日期优先 PaidDateUtc（与 BI 一致）
--- 2. 入库事件去重 + 含 Transfer 调拨
--- 3. 取样天数与销量窗口严格一致（含首尾）
--- 4. 输出 SampleStart/End/Days/Qty 便于对账
--- 5. AvgDailyDemand_3Checkins_Avg 排除未满30天的最近一次
--- ============================================================
-
-WITH
+WITH 
 -- ============================================
 -- 1. 销量层
 -- ============================================
 DailySales AS (
     SELECT
-        CAST(COALESCE(o.PaidDateUtc, o.DateCreatedUtc) AS DATE) AS OrderDate,
+        CAST(o.DateCreatedUtc AS DATE) AS OrderDate,
         p.Sku,
         CASE
-            WHEN TRIM(w.Name) IN ('CHCH Gerald Connelly', 'GC', 'treffers', 'CHCH Treffers') THEN N'南岛'
-            WHEN TRIM(w.Name) IN (
-                'Hamilton Te Rapa', 'Carbine Rd Warehouse', 'Walls', 'Westgate Storage',
-                'Walls Road', 'Walls in Transit', 'Hamilton Storage', 'Leonard Warehouse'
-            ) THEN N'北岛'
-            ELSE N'北岛'
+            WHEN TRIM(w.Name) IN ('CHCH Gerald Connelly', 'GC', 'treffers', 'CHCH Treffers') THEN '南岛'
+            WHEN TRIM(w.Name) IN ('Hamilton Te Rapa', 'Carbine Rd Warehouse', 'Walls', 'Westgate Storage', 'Walls Road', 'Walls in Transit', 'Hamilton Storage', 'Leonard Warehouse') THEN '北岛'
+            ELSE '北岛'
         END AS Region,
         SUM(ol.Quantity) AS DailyQty
     FROM Orders o
@@ -36,43 +18,38 @@ DailySales AS (
     LEFT JOIN Warehouses w
         ON TRY_CAST(JSON_VALUE(ol.StockSnapshotJson, '$[0].WarehouseId') AS UNIQUEIDENTIFIER) = w.Id
     WHERE LEFT(p.Sku, 3) IN ('{sku}')
-      AND CAST(COALESCE(o.PaidDateUtc, o.DateCreatedUtc) AS DATE) BETWEEN '2025-01-01' AND '2099-12-31'
+      AND o.DateCreatedUtc >= '2025-01-01'
       AND ISJSON(ol.StockSnapshotJson) = 1
       AND TRIM(w.Name) NOT IN (
           'CHCH Display', 'CHCH Display Colombo', 'CHCH Shop Storage', 'CHCH Colombo Shop Storage',
-          'Onehunga Shop-Display', 'Onehunga Shop-Storage', 'Hamilton Shop Display',
-          'Hamilton Old Display (No longer available)', 'Westgate display',
-          'Presale-AKL', 'East Tamaki -Luo(No longer available)', 'Missing/To be located',
-          '[Action Request]', '123 Jef', 'Onehunga warehouse(No longer available)'
+          'Onehunga Shop-Display', 'Onehunga Shop-Storage', 'Hamilton Shop Display', 'Hamilton Old Display (No longer available)', 'Westgate display',
+          'Presale-AKL', 'East Tamaki -Luo(No longer available)', 'Missing/To be located', '[Action Request]', '123 Jef', 'Onehunga warehouse(No longer available)'
       )
     GROUP BY
-        CAST(COALESCE(o.PaidDateUtc, o.DateCreatedUtc) AS DATE),
-        p.Sku,
+        CAST(o.DateCreatedUtc AS DATE), p.Sku,
         CASE
-            WHEN TRIM(w.Name) IN ('CHCH Gerald Connelly', 'GC', 'treffers', 'CHCH Treffers') THEN N'南岛'
-            WHEN TRIM(w.Name) IN (
-                'Hamilton Te Rapa', 'Carbine Rd Warehouse', 'Walls', 'Westgate Storage',
-                'Walls Road', 'Walls in Transit', 'Hamilton Storage', 'Leonard Warehouse'
-            ) THEN N'北岛'
-            ELSE N'北岛'
+            WHEN TRIM(w.Name) IN ('CHCH Gerald Connelly', 'GC', 'treffers', 'CHCH Treffers') THEN '南岛'
+            WHEN TRIM(w.Name) IN ('Hamilton Te Rapa', 'Carbine Rd Warehouse', 'Walls', 'Westgate Storage', 'Walls Road', 'Walls in Transit', 'Hamilton Storage', 'Leonard Warehouse') THEN '北岛'
+            ELSE '北岛'
         END
 ),
 
 -- ============================================
--- 2. 补货事件层
+-- 2. 补货事件层：统一两种来源，CheckinDate 统一转 DATE
 -- ============================================
-RestockEvents_Raw AS (
+RestockEvents AS (
+    -- 2A. 海外进货（PO/Container 到港）
     SELECT
         p.Sku,
         CASE
-            WHEN c.ShippedtoportId = '3b9ff26b-4ec0-44c6-92ac-ee9804272426' THEN N'南岛'
-            WHEN c.ShippedtoportId = '646a2216-87c2-4bc6-8469-fdbd90bb2d84' THEN N'北岛'
-            ELSE N'北岛'
+            WHEN c.ShippedtoportId = '3b9ff26b-4ec0-44c6-92ac-ee9804272426' THEN '南岛'
+            WHEN c.ShippedtoportId = '646a2216-87c2-4bc6-8469-fdbd90bb2d84' THEN '北岛'
+            ELSE '北岛'
         END AS Region,
         CAST(c.ActualArrivingDate AS DATE) AS CheckinDate,
         c.ContainerNumber,
         po.PurchaseOrderCode,
-        N'PO' AS SourceType
+        'PO' AS SourceType
     FROM PurchaseOrders po
     JOIN PurchaseOrderLines pol ON pol.PurchaseOrderId = po.Id
     JOIN Products p ON pol.ProductId = p.Id
@@ -82,159 +59,132 @@ RestockEvents_Raw AS (
 
     UNION ALL
 
+    -- 2B. 北岛调拨到南岛（Transfers）
     SELECT
         p.Sku,
-        N'南岛' AS Region,
+        '南岛' AS Region,
         CAST(t.CompletedOnUtc AS DATE) AS CheckinDate,
         NULL AS ContainerNumber,
-        N'Transfer' AS PurchaseOrderCode,
-        N'Transfer' AS SourceType
+        'Transfer' AS PurchaseOrderCode,
+        'Transfer' AS SourceType
     FROM dbo.Transfers t
     JOIN dbo.Products p ON t.ProductId = p.Id
     LEFT JOIN dbo.Warehouses w_source ON t.SourceWarehouseId = w_source.Id
     LEFT JOIN dbo.Warehouses w_target ON t.TargetWarehouseId = w_target.Id
-    WHERE w_target.Name = 'CHCH Gerald Connelly'
-      AND w_source.Name = 'CHCH in transit'
-      AND t.TransferJobStatus = 'Completed'
-      AND p.Sku LIKE '{sku}%'
-      AND CASE WHEN t.TransferType = 'Order' THEN 0 ELSE 1 END = 1
+    WHERE 
+        w_target.Name = 'CHCH Gerald Connelly'
+        AND w_source.Name = 'CHCH in transit'
+        AND t.TransferJobStatus = 'Completed'
+        AND p.Sku LIKE '{sku}%'
+        AND t.TransferType <> 'Order'
 ),
 
-RestockEvents AS (
-    SELECT
-        Sku,
-        Region,
-        CheckinDate,
-        MAX(ContainerNumber) AS ContainerNumber,
-        MAX(CAST(PurchaseOrderCode AS NVARCHAR(50))) AS PurchaseOrderCode,
-        MAX(SourceType) AS SourceType
-    FROM RestockEvents_Raw
-    GROUP BY Sku, Region, CheckinDate
-),
-
+-- ============================================
+-- 统一排序取最近 3 次
+-- ============================================
 RestockEvents_Ranked AS (
-    SELECT
-        *,
+    SELECT *,
         ROW_NUMBER() OVER (PARTITION BY Sku, Region ORDER BY CheckinDate DESC) AS rn
     FROM RestockEvents
 ),
 
 -- ============================================
--- 3. 取样窗口：入库后第1天 ~ 第30天（未满则到今天）
+-- 3. 单次表现层：计算 Checkin 后 30 天的销量表现（第1天~第30天）
 -- ============================================
-CheckinWindows AS (
+SingleCheckinPerformance AS (
     SELECT
         ck.Sku,
         ck.Region,
         ck.CheckinDate,
         ck.ContainerNumber,
         ck.PurchaseOrderCode,
-        ck.SourceType,
         ck.rn,
-        DATEADD(day, 1, ck.CheckinDate) AS SampleStart,
-        CASE
-            WHEN CAST(GETDATE() AS DATE) BETWEEN DATEADD(day, 1, ck.CheckinDate) AND DATEADD(day, 29, ck.CheckinDate)
-                THEN CAST(GETDATE() AS DATE)
-            ELSE DATEADD(day, 30, ck.CheckinDate)
-        END AS SampleEnd,
-        CASE
-            WHEN ck.rn = 1
-                 AND CAST(GETDATE() AS DATE) BETWEEN DATEADD(day, 1, ck.CheckinDate) AND DATEADD(day, 29, ck.CheckinDate)
-                THEN 1 ELSE 0
-        END AS IsPartialPeriod
-    FROM RestockEvents_Ranked ck
-    WHERE ck.rn BETWEEN 1 AND 3
-),
 
--- ============================================
--- 4. 单次表现层
--- ============================================
-SingleCheckinPerformance AS (
-    SELECT
-        cw.Sku,
-        cw.Region,
-        cw.CheckinDate,
-        cw.ContainerNumber,
-        cw.PurchaseOrderCode,
-        cw.SourceType,
-        cw.rn,
-        cw.SampleStart,
-        cw.SampleEnd,
-        cw.IsPartialPeriod,
+        -- 计算总销量：只统计第 1 天到第 30 天的销量
+        ISNULL(SUM(ds.DailyQty), 0) AS TotalQty_Period,
 
-        CASE
-            WHEN cw.SampleEnd BETWEEN '1900-01-01' AND DATEADD(day, -1, cw.SampleStart) THEN 0
-            ELSE DATEDIFF(day, cw.SampleStart, cw.SampleEnd) + 1
-        END AS SampleDays,
-
-        ISNULL(SUM(ds.DailyQty), 0) AS SampleQty,
-        COUNT(DISTINCT CASE WHEN ds.DailyQty BETWEEN 1 AND 999999 THEN ds.OrderDate END) AS DaysWithSales,
-
+        -- 计算实际天数：
+        -- 最近一次(rn=1)：取 (今天) 和 (入库后30天) 的较小值，减去 (入库当天)，最小为 0
+        -- 历史数据(rn>1)：固定 30 天
         CAST(
-            ISNULL(SUM(ds.DailyQty), 0) * 1.0
-            / NULLIF(
-                CASE
-                    WHEN cw.SampleEnd BETWEEN '1900-01-01' AND DATEADD(day, -1, cw.SampleStart) THEN NULL
-                    ELSE DATEDIFF(day, cw.SampleStart, cw.SampleEnd) + 1.0
-                END,
-                0
-            )
-        AS DECIMAL(18, 6)) AS SingleAvg_Daily
+            CASE
+                WHEN ck.rn = 1 THEN
+                    CASE
+                        WHEN DATEDIFF(day, ck.CheckinDate, 
+                            CASE WHEN CAST(GETDATE() AS DATE) < DATEADD(day, 30, ck.CheckinDate) 
+                                 THEN CAST(GETDATE() AS DATE) 
+                                 ELSE DATEADD(day, 30, ck.CheckinDate) 
+                            END) < 0
+                        THEN 0
+                        ELSE DATEDIFF(day, ck.CheckinDate, 
+                            CASE WHEN CAST(GETDATE() AS DATE) < DATEADD(day, 30, ck.CheckinDate) 
+                                 THEN CAST(GETDATE() AS DATE) 
+                                 ELSE DATEADD(day, 30, ck.CheckinDate) 
+                            END)
+                    END
+                ELSE 30.0
+            END
+        AS FLOAT) AS ActualDays,
 
-    FROM CheckinWindows cw
+        -- 计算单次平均：总销量 / 实际天数
+        ISNULL(SUM(ds.DailyQty), 0) /
+        NULLIF(CAST(
+            CASE
+                WHEN ck.rn = 1 THEN
+                    CASE
+                        WHEN DATEDIFF(day, ck.CheckinDate, 
+                            CASE WHEN CAST(GETDATE() AS DATE) < DATEADD(day, 30, ck.CheckinDate) 
+                                 THEN CAST(GETDATE() AS DATE) 
+                                 ELSE DATEADD(day, 30, ck.CheckinDate) 
+                            END) < 0
+                        THEN 0
+                        ELSE DATEDIFF(day, ck.CheckinDate, 
+                            CASE WHEN CAST(GETDATE() AS DATE) < DATEADD(day, 30, ck.CheckinDate) 
+                                 THEN CAST(GETDATE() AS DATE) 
+                                 ELSE DATEADD(day, 30, ck.CheckinDate) 
+                            END)
+                    END
+                ELSE 30.0
+            END
+        AS FLOAT), 0) AS SingleAvg_Daily
+
+    FROM RestockEvents_Ranked ck
     LEFT JOIN DailySales ds
-        ON cw.Sku = ds.Sku
-       AND cw.Region = ds.Region
-       AND ds.OrderDate BETWEEN cw.SampleStart AND cw.SampleEnd
+        ON ck.Sku = ds.Sku
+        AND ck.Region = ds.Region
+        -- 核心：筛选销量日期在入库后第1天到第30天之间
+        AND ds.OrderDate > ck.CheckinDate
+        AND ds.OrderDate <= DATEADD(day, 30, ck.CheckinDate)
+    WHERE ck.rn <= 3
     GROUP BY
-        cw.Sku, cw.Region, cw.CheckinDate, cw.ContainerNumber, cw.PurchaseOrderCode,
-        cw.SourceType, cw.rn, cw.SampleStart, cw.SampleEnd, cw.IsPartialPeriod
+        ck.Sku, ck.Region, ck.CheckinDate, ck.ContainerNumber, ck.PurchaseOrderCode, ck.rn
 ),
 
 -- ============================================
--- 5. 最终聚合层
+-- 4. 最终聚合层
 -- ============================================
 FinalResult AS (
     SELECT
-        scp.*,
-
-        AVG(
-            CASE
-                WHEN scp.rn = 1 AND scp.IsPartialPeriod = 1 THEN NULL
-                ELSE scp.SingleAvg_Daily
-            END
-        ) OVER (PARTITION BY scp.Sku, scp.Region) AS AvgDailyDemand_3Checkins_Avg,
-
-        AVG(scp.SingleAvg_Daily) OVER (PARTITION BY scp.Sku, scp.Region) AS AvgDailyDemand_3Checkins_Avg_All,
-
-        CAST(
-            SUM(scp.SampleQty) OVER (PARTITION BY scp.Sku, scp.Region) * 1.0
-            / NULLIF(SUM(scp.SampleDays) OVER (PARTITION BY scp.Sku, scp.Region), 0)
-        AS DECIMAL(18, 6)) AS AvgDailyDemand_Weighted
-
-    FROM SingleCheckinPerformance scp
+        Sku,
+        Region,
+        CheckinDate,
+        ContainerNumber,
+        PurchaseOrderCode,
+        SingleAvg_Daily,
+        AVG(SingleAvg_Daily) OVER (PARTITION BY Sku, Region) AS AvgDailyDemand_3Checkins_Avg
+    FROM SingleCheckinPerformance
 )
 
 -- ============================================
--- 6. 输出
+-- 5. 输出结果
 -- ============================================
 SELECT
-    N'30' AS WindowType,
     Sku,
     Region,
     CheckinDate,
     ContainerNumber,
     PurchaseOrderCode,
-    rn AS CheckinRank,
-    IsPartialPeriod,
-    SampleStart,
-    SampleEnd,
-    SampleDays,
-    SampleQty,
-    DaysWithSales,
     SingleAvg_Daily,
-    AvgDailyDemand_3Checkins_Avg,
-    AvgDailyDemand_3Checkins_Avg_All,
-    AvgDailyDemand_Weighted
+    AvgDailyDemand_3Checkins_Avg
 FROM FinalResult
 ORDER BY Sku, Region, CheckinDate DESC;
