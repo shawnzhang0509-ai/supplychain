@@ -166,6 +166,7 @@ SingleCheckinPerformance AS (
 )
 
 SELECT
+    N'8-30' AS WindowType,
     Sku,
     Region,
     CheckinDate,
