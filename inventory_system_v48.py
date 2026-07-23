@@ -414,7 +414,7 @@ class InventoryDecisionSystem:
         self.help_frame = tk.Frame(self.root, bg=ERP_PANEL_BG, highlightbackground=ERP_BORDER, highlightthickness=1)
         help_text = (
             "数据：stock.csv 需含 ImageUrl  |  PO.csv：无 ContainerNumber=在产，有 ContainerNumber=在途  |  "
-            "催促发货：总量>LT预估 且 在产≥物流预估（催工厂发货；在途已在路上不催）"
+            "催促发货：现货+在途≤物流预估 且有在产（催工厂发货；在途已在路上不单独催）"
         )
         self.help_label = tk.Label(self.help_frame, text=help_text, justify="left",
                                    font=UI_FONT, fg=ERP_MUTED, bg=ERP_PANEL_BG)
@@ -1242,18 +1242,17 @@ class InventoryDecisionSystem:
                     order_vol = order_qty * price_vol
                     return ("下单备货", order_qty, order_vol,
                            f"总库存{total:.0f}≤{lt_days}天需求({lt_need:.1f})，缺口{order_qty:.0f}，体积{order_vol:.4f}m³，基于{source}")
-                elif production >= log_need:
+                elif (in_stock + transit) <= log_need and production > 0:
                     expedite_vol = production * price_vol
                     return ("催促发货", 0, 0,
-                           f"总量{total:.0f}>{lt_days}天需求({lt_need:.1f})，"
-                           f"在产{production:.0f}≥{log_days}天物流需求({log_need:.1f})，需催工厂发货，"
-                           f"催发货体积{expedite_vol:.4f}m³")
+                           f"现货+在途{in_stock + transit:.0f}≤{log_days}天物流需求({log_need:.1f})，"
+                           f"需催在产{production:.0f}件尽快发货，催发货体积{expedite_vol:.4f}m³")
                 else:
                     days = total / daily if daily > 0 else 0
-                    if production > 0 and production < log_need:
+                    if (in_stock + transit) <= log_need and production == 0:
                         return ("保持现状", 0, 0,
-                               f"在产{production:.0f}<{log_days}天物流需求({log_need:.1f})，"
-                               f"暂无需催，总库存可撑{days:.0f}天")
+                               f"现货+在途{in_stock + transit:.0f}≤{log_days}天物流需求({log_need:.1f})，"
+                               f"无在产可催，总库存可撑{days:.0f}天")
                     return ("保持现状", 0, 0,
                            f"库存充足(现货{in_stock:.0f}+在途{transit:.0f}+在产{production:.0f})，基于{source}可撑{days:.0f}天")
 
