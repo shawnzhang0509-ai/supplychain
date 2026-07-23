@@ -19,8 +19,8 @@ plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode M
 plt.rcParams['axes.unicode_minus'] = False
 
 CONFIG_FILE = "inventory_config.json"
-CHANNEL_SETTINGS_FILE = "channel_settings.json"
-CHANNEL_SETTINGS_TEMPLATE = "channel_settings.template.json"
+CHANNELS_SETTINGS_FILE = "channels_settings.json"
+CHANNELS_SETTINGS_TEMPLATE = "channels_settings.template.json"
 DEFAULT_LEAD_TIME = 90
 DEFAULT_LOGISTICS_TIME = 30
 CONTAINER_THRESHOLD = 69.0
@@ -242,11 +242,18 @@ class InventoryDecisionSystem:
             return f"dec_{decision}_{stripe % 2}"
         return "even" if stripe % 2 == 0 else "odd"
 
-    def _channel_folder(self, channel):
-        return os.path.join(self.data_dir.get(), channel)
+    def _list_channel_folders(self, data_dir=None):
+        data_dir = data_dir or self.data_dir.get()
+        if not data_dir or not os.path.exists(data_dir):
+            return []
+        return sorted(
+            d for d in os.listdir(data_dir)
+            if os.path.isdir(os.path.join(data_dir, d)) and not d.startswith((".", "_"))
+        )
 
-    def _channel_settings_path(self, channel):
-        return os.path.join(self._channel_folder(channel), CHANNEL_SETTINGS_FILE)
+    def _channels_settings_path(self, data_dir=None):
+        data_dir = data_dir or self.data_dir.get()
+        return os.path.join(data_dir, CHANNELS_SETTINGS_FILE)
 
     def _default_channel_settings(self):
         return {
@@ -255,25 +262,97 @@ class InventoryDecisionSystem:
             "备注": "",
         }
 
-    def load_channel_settings(self, channel):
-        settings = self._default_channel_settings()
-        if not channel:
-            return settings
-        path = self._channel_settings_path(channel)
+    def _normalize_channel_entry(self, entry, fallback=None):
+        fallback = fallback or self._default_channel_settings()
+        if not isinstance(entry, dict):
+            entry = {}
+        lead = entry.get("LeadTime", fallback["LeadTime"])
+        logistics = entry.get("LogisticsTime", fallback["LogisticsTime"])
+        try:
+            lead = int(lead)
+        except (TypeError, ValueError):
+            lead = fallback["LeadTime"]
+        try:
+            logistics = int(logistics)
+        except (TypeError, ValueError):
+            logistics = fallback["LogisticsTime"]
+        return {
+            "LeadTime": lead,
+            "LogisticsTime": logistics,
+            "备注": str(entry.get("备注", fallback.get("备注", ""))),
+        }
+
+    def _load_channels_settings_document(self, data_dir=None):
+        data_dir = data_dir or self.data_dir.get()
+        document = {
+            "_说明": (
+                "放在数据根目录（例如 output 文件夹）。channels 下每个键名=SKU渠道文件夹名，"
+                "可单独设置 LeadTime(采购交期天数) 和 LogisticsTime(物流周期天数)。"
+            ),
+            "default": self._default_channel_settings(),
+            "channels": {},
+        }
+        path = self._channels_settings_path(data_dir)
         if not os.path.exists(path):
-            return settings
+            return document
         try:
             with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data.get("LeadTime"), (int, float)):
-                settings["LeadTime"] = int(data["LeadTime"])
-            if isinstance(data.get("LogisticsTime"), (int, float)):
-                settings["LogisticsTime"] = int(data["LogisticsTime"])
-            if data.get("备注") is not None:
-                settings["备注"] = str(data.get("备注", ""))
+                loaded = json.load(f)
+            if isinstance(loaded.get("default"), dict):
+                document["default"] = self._normalize_channel_entry(
+                    loaded["default"], self._default_channel_settings()
+                )
+            if isinstance(loaded.get("channels"), dict):
+                document["channels"] = {
+                    str(name): self._normalize_channel_entry(
+                        entry, document["default"]
+                    )
+                    for name, entry in loaded["channels"].items()
+                    if not str(name).startswith("_")
+                }
+            if loaded.get("_说明"):
+                document["_说明"] = str(loaded["_说明"])
         except Exception:
             pass
-        return settings
+        return document
+
+    def _save_channels_settings_document(self, document, data_dir=None):
+        data_dir = data_dir or self.data_dir.get()
+        if not data_dir:
+            return False
+        os.makedirs(data_dir, exist_ok=True)
+        with open(self._channels_settings_path(data_dir), "w", encoding="utf-8") as f:
+            json.dump(document, f, ensure_ascii=False, indent=2)
+        return True
+
+    def sync_channels_settings(self, data_dir=None):
+        data_dir = data_dir or self.data_dir.get()
+        if not data_dir or not os.path.exists(data_dir):
+            return None
+        document = self._load_channels_settings_document(data_dir)
+        default = document["default"]
+        channels = self._list_channel_folders(data_dir)
+        for channel in channels:
+            if channel not in document["channels"]:
+                document["channels"][channel] = self._normalize_channel_entry({}, default)
+        self._save_channels_settings_document(document, data_dir)
+        return document
+
+    def load_channel_settings(self, channel):
+        if not channel:
+            return self._default_channel_settings()
+        document = self._load_channels_settings_document()
+        default = document["default"]
+        entry = document["channels"].get(channel)
+        if entry is None:
+            return self._normalize_channel_entry({}, default)
+        return self._normalize_channel_entry(entry, default)
+
+    def get_channel_settings_source(self, channel):
+        document = self._load_channels_settings_document()
+        if channel in document["channels"]:
+            return CHANNELS_SETTINGS_FILE
+        return "default"
 
     def apply_channel_settings(self, channel):
         settings = self.load_channel_settings(channel)
@@ -286,17 +365,16 @@ class InventoryDecisionSystem:
     def save_channel_settings(self, channel, lead_time=None, logistics_time=None, note=None):
         if not channel:
             return False
-        folder = self._channel_folder(channel)
-        os.makedirs(folder, exist_ok=True)
-        current = self.load_channel_settings(channel)
-        payload = {
+        document = self.sync_channels_settings()
+        if document is None:
+            return False
+        current = document["channels"].get(channel, document["default"])
+        document["channels"][channel] = {
             "LeadTime": int(lead_time if lead_time is not None else self.lead_time.get()),
             "LogisticsTime": int(logistics_time if logistics_time is not None else self.logistics_time.get()),
             "备注": note if note is not None else current.get("备注", ""),
         }
-        with open(self._channel_settings_path(channel), "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
-        return True
+        return self._save_channels_settings_document(document)
 
     def get_channel_timing(self, channel, use_ui=False):
         settings = self.load_channel_settings(channel)
@@ -314,17 +392,27 @@ class InventoryDecisionSystem:
             self.apply_channel_settings(channel)
         self.update_file_status()
 
-    def ensure_channel_settings_template(self):
-        data_dir = self.data_dir.get()
+    def ensure_channels_settings_template(self, data_dir=None):
+        data_dir = data_dir or self.data_dir.get()
         if not data_dir or not os.path.exists(data_dir):
             return
-        template_path = os.path.join(data_dir, CHANNEL_SETTINGS_TEMPLATE)
+        template_path = os.path.join(data_dir, CHANNELS_SETTINGS_TEMPLATE)
         if os.path.exists(template_path):
             return
         payload = {
-            "LeadTime": DEFAULT_LEAD_TIME,
-            "LogisticsTime": DEFAULT_LOGISTICS_TIME,
-            "备注": "LeadTime=采购交期(天)，LogisticsTime=物流周期(天)。复制到各渠道文件夹并重命名为 channel_settings.json。",
+            "_说明": (
+                "复制为 channels_settings.json 放在数据根目录（output 文件夹）。"
+                "channels 的键名必须与 SKU 渠道子文件夹名称一致，例如 918、996。"
+            ),
+            "default": {
+                "LeadTime": DEFAULT_LEAD_TIME,
+                "LogisticsTime": DEFAULT_LOGISTICS_TIME,
+                "备注": "未单独配置的渠道使用 default",
+            },
+            "channels": {
+                "918": {"LeadTime": 90, "LogisticsTime": 30, "备注": "示例：918 渠道"},
+                "996": {"LeadTime": 120, "LogisticsTime": 45, "备注": "示例：996 渠道"},
+            },
         }
         with open(template_path, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
@@ -591,8 +679,8 @@ class InventoryDecisionSystem:
         self.help_visible = tk.BooleanVar(value=False)
         self.help_frame = tk.Frame(self.root, bg=ERP_PANEL_BG, highlightbackground=ERP_BORDER, highlightthickness=1)
         help_text = (
-            "数据：stock.csv 需含 ImageUrl  |  每渠道可放 channel_settings.json 自定义 LeadTime/物流天数  |  "
-            "PO：无 ContainerNumber=在产，有=在途  |  催促发货：现货+在途≤物流预估且有在产"
+            "数据：stock.csv 需含 ImageUrl  |  在数据根目录(output)放 channels_settings.json 配置各 SKU 的 LT/物流天数  |  "
+            "PO：无 ContainerNumber=在产，有=在途"
         )
         self.help_label = tk.Label(self.help_frame, text=help_text, justify="left",
                                    font=UI_FONT, fg=ERP_MUTED, bg=ERP_PANEL_BG)
@@ -703,16 +791,13 @@ class InventoryDecisionSystem:
                 messagebox.showerror("错误", "请先选择有效的数据根目录")
             return
         try:
-            channels = [
-                d for d in os.listdir(data_dir)
-                if os.path.isdir(os.path.join(data_dir, d)) and not d.startswith((".", "_"))
-            ]
-            channels.sort()
+            channels = self._list_channel_folders(data_dir)
             self._set_combo_values(self.channel_combo, channels)
             if channels:
+                self.ensure_channels_settings_template(data_dir)
+                self.sync_channels_settings(data_dir)
                 self.channel_combo.set(channels[0])
                 self.apply_channel_settings(channels[0])
-                self.ensure_channel_settings_template()
                 self.update_file_status()
             else:
                 self._set_label(self.file_status_label, "该目录下未找到子文件夹（渠道）", "#DC2626")
@@ -735,14 +820,20 @@ class InventoryDecisionSystem:
             status_lines.append(f"{symbol} {f}")
             if not exists: all_ready = False
         settings = self.load_channel_settings(ch)
-        settings_path = self._channel_settings_path(ch)
+        settings_path = self._channels_settings_path(dir_path)
+        source = self.get_channel_settings_source(ch)
         if os.path.exists(settings_path):
-            status_lines.append(
-                f"✓ {CHANNEL_SETTINGS_FILE} (LT {settings['LeadTime']} / 物流 {settings['LogisticsTime']})"
-            )
+            if source == CHANNELS_SETTINGS_FILE:
+                status_lines.append(
+                    f"✓ {CHANNELS_SETTINGS_FILE} · [{ch}] LT {settings['LeadTime']} / 物流 {settings['LogisticsTime']}"
+                )
+            else:
+                status_lines.append(
+                    f"○ {CHANNELS_SETTINGS_FILE} 已存在，但 [{ch}] 使用 default · LT {settings['LeadTime']} / 物流 {settings['LogisticsTime']}"
+                )
         else:
             status_lines.append(
-                f"○ {CHANNEL_SETTINGS_FILE} 未配置，使用默认 LT {settings['LeadTime']} / 物流 {settings['LogisticsTime']}"
+                f"○ 未找到 {CHANNELS_SETTINGS_FILE}，[{ch}] 使用默认 LT {settings['LeadTime']} / 物流 {settings['LogisticsTime']}"
             )
         self._set_label(self.file_status_label, "  |  ".join(status_lines),
                         "#16A34A" if all_ready else "#DC2626")
@@ -1093,11 +1184,7 @@ class InventoryDecisionSystem:
             return
 
         try:
-            all_channels = [
-                d for d in os.listdir(data_dir)
-                if os.path.isdir(os.path.join(data_dir, d)) and not d.startswith((".", "_"))
-            ]
-            all_channels.sort()
+            all_channels = self._list_channel_folders(data_dir)
         except Exception as e:
             self._set_label(self.summary_label, f"读取渠道列表失败: {e}")
             self.stop_auto_scan()

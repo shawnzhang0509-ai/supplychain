@@ -1,5 +1,0 @@
-{
-  "LeadTime": 90,
-  "LogisticsTime": 30,
-  "备注": "LeadTime=采购交期(天)，LogisticsTime=物流周期(天)。复制本文件到各渠道文件夹（如 data/918/），重命名为 channel_settings.json 后修改数值。"
-}

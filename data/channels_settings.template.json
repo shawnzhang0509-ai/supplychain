@@ -1,0 +1,20 @@
+{
+  "_说明": "复制为 channels_settings.json，放在数据根目录（例如 D:\\工作\\供应链\\自动出数据 - 20260721\\output）。channels 的键名必须与每个 SKU 子文件夹名称一致。",
+  "default": {
+    "LeadTime": 90,
+    "LogisticsTime": 30,
+    "备注": "未单独配置的 SKU 渠道使用 default"
+  },
+  "channels": {
+    "918": {
+      "LeadTime": 90,
+      "LogisticsTime": 30,
+      "备注": "918 渠道"
+    },
+    "996": {
+      "LeadTime": 120,
+      "LogisticsTime": 45,
+      "备注": "996 渠道"
+    }
+  }
+}
