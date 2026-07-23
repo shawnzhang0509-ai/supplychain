@@ -12,6 +12,7 @@
 -- 3. 取样天数与销量窗口严格一致（含首尾）
 -- 4. 输出 SampleStart/End/Days/Qty 便于对账
 -- 5. AvgDailyDemand_3Checkins_Avg 排除未满15天的最近一次
+-- 6. 避免 < / <= / <> 符号（main-gui 导出工具会误删这些字符）
 -- ============================================================
 
 WITH
@@ -98,7 +99,7 @@ RestockEvents_Raw AS (
       AND w_source.Name = 'CHCH in transit'
       AND t.TransferJobStatus = 'Completed'
       AND p.Sku LIKE '{sku}%'
-      AND t.TransferType <> 'Order'
+      AND NOT (t.TransferType = 'Order')
 ),
 
 -- 同一天同地区多次到港合并为一次补货事件
@@ -135,17 +136,17 @@ CheckinWindows AS (
         re.rn,
         DATEADD(day, 1, re.RestockDate) AS SampleStart,
         CASE
-            WHEN CAST(GETDATE() AS DATE) < DATEADD(day, 15, re.RestockDate)
+            WHEN DATEDIFF(day, CAST(GETDATE() AS DATE), DATEADD(day, 15, re.RestockDate)) > 0
                 THEN CAST(GETDATE() AS DATE)
             ELSE DATEADD(day, 15, re.RestockDate)
         END AS SampleEnd,
         CASE
             WHEN re.rn = 1
-                 AND CAST(GETDATE() AS DATE) < DATEADD(day, 15, re.RestockDate)
+                 AND DATEDIFF(day, CAST(GETDATE() AS DATE), DATEADD(day, 15, re.RestockDate)) > 0
                 THEN 1 ELSE 0
         END AS IsPartialPeriod
     FROM RestockEvents_Ranked re
-    WHERE re.rn <= 3
+    WHERE re.rn BETWEEN 1 AND 3
 ),
 
 -- ============================================
@@ -165,7 +166,7 @@ SingleCheckinPerformance AS (
         cw.IsPartialPeriod,
 
         CASE
-            WHEN cw.SampleEnd < cw.SampleStart THEN 0
+            WHEN DATEDIFF(day, cw.SampleEnd, cw.SampleStart) > 0 THEN 0
             ELSE DATEDIFF(day, cw.SampleStart, cw.SampleEnd) + 1
         END AS SampleDays,
 
@@ -176,7 +177,7 @@ SingleCheckinPerformance AS (
             ISNULL(SUM(ds.DailyQty), 0) * 1.0
             / NULLIF(
                 CASE
-                    WHEN cw.SampleEnd < cw.SampleStart THEN NULL
+                    WHEN DATEDIFF(day, cw.SampleEnd, cw.SampleStart) > 0 THEN NULL
                     ELSE DATEDIFF(day, cw.SampleStart, cw.SampleEnd) + 1.0
                 END,
                 0
@@ -187,8 +188,8 @@ SingleCheckinPerformance AS (
     LEFT JOIN DailySales ds
         ON cw.Sku = ds.Sku
        AND cw.Region = ds.Region
-       AND ds.OrderDate >= cw.SampleStart
-       AND ds.OrderDate <= cw.SampleEnd
+       AND DATEDIFF(day, cw.SampleStart, ds.OrderDate) >= 0
+       AND DATEDIFF(day, ds.OrderDate, cw.SampleEnd) >= 0
     GROUP BY
         cw.Sku, cw.Region, cw.CheckinDate, cw.ContainerNumber, cw.PurchaseOrderCode,
         cw.SourceType, cw.rn, cw.SampleStart, cw.SampleEnd, cw.IsPartialPeriod
