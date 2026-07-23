@@ -59,6 +59,14 @@ ERP_MUTED = "#6C757D"
 ERP_TABLE_HEAD = "#E8EEF5"
 ERP_STATUS_BG = "#FFF8E6"
 
+DECISION_STYLES = {
+    "下单备货": {"badge_bg": "#E53935", "badge_fg": "white", "row_bg": "#FFEBEE", "row_fg": "#B71C1C"},
+    "催促发货": {"badge_bg": "#FB8C00", "badge_fg": "white", "row_bg": "#FFF3E0", "row_fg": "#E65100"},
+    "保持现状": {"badge_bg": "#43A047", "badge_fg": "white", "row_bg": "#E8F5E9", "row_fg": "#2E7D32"},
+    "暂无销售": {"badge_bg": "#78909C", "badge_fg": "white", "row_bg": "#ECEFF1", "row_fg": "#546E7A"},
+}
+DECISION_ORDER = ["下单备货", "催促发货", "保持现状", "暂无销售"]
+
 class InventoryDecisionSystem:
     def __init__(self, root):
         self.root = root
@@ -213,6 +221,56 @@ class InventoryDecisionSystem:
     def _set_label(self, label, text, color=ERP_TEXT):
         label.configure(text=text, fg=color)
 
+    def _decision_tag(self, decision):
+        return f"dec_{decision}"
+
+    def _decision_badge_text(self, decision, subset):
+        if decision == "下单备货":
+            vol = subset["备货体积"].sum()
+            return f" {decision}  {len(subset)}行 · 备货 {vol:.3f} m³ "
+        if decision == "催促发货":
+            vol = subset["催发货体积"].sum()
+            production = subset["在产库存"].sum()
+            return f" {decision}  {len(subset)}行 · 在产 {production:.0f}件 · 催发 {vol:.3f} m³ "
+        return f" {decision}  {len(subset)}行 "
+
+    def _update_decision_badges(self, df):
+        for widget in self.decision_badge_frame.winfo_children():
+            widget.destroy()
+        if self.result_data is None:
+            return
+        active = self.filter_decision.get()
+        for decision in DECISION_ORDER:
+            subset = self.result_data[self.result_data["决策建议"] == decision]
+            if len(subset) == 0:
+                continue
+            style = DECISION_STYLES[decision]
+            is_active = active == decision
+            badge = tk.Label(
+                self.decision_badge_frame,
+                text=self._decision_badge_text(decision, subset),
+                font=UI_FONT_BOLD,
+                bg=style["badge_bg"],
+                fg=style["badge_fg"],
+                padx=2,
+                pady=3,
+                cursor="hand2",
+                relief="solid",
+                borderwidth=2 if is_active else 0,
+                highlightbackground="#2C3E50" if is_active else style["badge_bg"],
+                highlightthickness=2 if is_active else 0,
+            )
+            badge.pack(side="left", padx=(0, 8), pady=2)
+            badge.bind("<Button-1>", lambda _e, d=decision: self._on_decision_badge_click(d))
+
+    def _on_decision_badge_click(self, decision):
+        if self.filter_decision.get() == decision:
+            self.filter_decision.set("全部")
+        else:
+            self.filter_decision.set(decision)
+        self.decision_combo.set(self.filter_decision.get())
+        self.refresh_display()
+
     def _family_matches(self, query):
         query = (query or "").strip()
         if not query or query == "全部":
@@ -362,7 +420,9 @@ class InventoryDecisionSystem:
         status_bar.pack(fill="x", padx=8, pady=(0, 4))
         self.container_status_label = tk.Label(status_bar, text="等待分析...", font=UI_FONT_BOLD,
                                                bg=ERP_STATUS_BG, fg=ERP_TEXT, justify="left", anchor="w")
-        self.container_status_label.pack(fill="x", padx=8, pady=(4, 0))
+        self.container_status_label.pack(fill="x", padx=8, pady=(4, 2))
+        self.decision_badge_frame = tk.Frame(status_bar, bg=ERP_STATUS_BG)
+        self.decision_badge_frame.pack(fill="x", padx=8, pady=(0, 2))
         self.volume_detail_label = tk.Label(status_bar, text="", font=UI_FONT,
                                             bg=ERP_STATUS_BG, fg=ERP_MUTED, justify="left", anchor="w")
         self.volume_detail_label.pack(fill="x", padx=8, pady=(0, 4))
@@ -372,7 +432,13 @@ class InventoryDecisionSystem:
         head = self._frame(table_section)
         head.pack(fill="x", padx=8, pady=(6, 4))
         self._lbl(head, "分析结果", bold=True).pack(side="left")
-        self._lbl(head, "（点击表头排序，Shift+点击设次排序）", fg=ERP_MUTED).pack(side="left", padx=(8, 0))
+        self._lbl(head, "（点击表头排序，Shift+点击设次排序）", fg=ERP_MUTED).pack(side="left", padx=(8, 12))
+        self.decision_legend_frame = tk.Frame(head, bg=ERP_PANEL_BG)
+        self.decision_legend_frame.pack(side="left")
+        for decision in DECISION_ORDER:
+            style = DECISION_STYLES[decision]
+            tk.Label(self.decision_legend_frame, text=f" {decision} ", font=UI_FONT,
+                     bg=style["badge_bg"], fg=style["badge_fg"], padx=4, pady=1).pack(side="left", padx=(0, 4))
 
         table_wrap = self._frame(table_section)
         table_wrap.pack(fill="both", expand=True, padx=6, pady=(0, 6))
@@ -403,6 +469,12 @@ class InventoryDecisionSystem:
 
         self.tree.tag_configure("even", background=ERP_ROW_EVEN, foreground=ERP_TEXT)
         self.tree.tag_configure("odd", background=ERP_ROW_ODD, foreground=ERP_TEXT)
+        for decision, style in DECISION_STYLES.items():
+            self.tree.tag_configure(
+                self._decision_tag(decision),
+                background=style["row_bg"],
+                foreground=style["row_fg"],
+            )
 
         footer = tk.Frame(self.root, bg=ERP_PANEL_BG, highlightbackground=ERP_BORDER, highlightthickness=1)
         footer.pack(fill="x", padx=8, pady=(0, 8))
@@ -786,24 +858,11 @@ class InventoryDecisionSystem:
             status_color = "#DC2626" if (north_can or south_can) else "#334155"
 
         self._set_label(self.container_status_label, status_text, status_color)
+        self._update_decision_badges(df)
 
-        decision_stats = []
-        for decision in ["下单备货", "催促发货", "保持现状", "暂无销售"]:
-            subset = df[df['决策建议'] == decision]
-            if len(subset) == 0:
-                continue
-            if decision == "下单备货":
-                vol = subset['备货体积'].sum()
-                decision_stats.append(f"{decision} {len(subset)} 行 / 备货 {vol:.3f} m³")
-            elif decision == "催促发货":
-                vol = subset['催发货体积'].sum()
-                production = subset['在产库存'].sum()
-                decision_stats.append(f"{decision} {len(subset)} 行 / 在产 {production:.0f} 件 / 催发 {vol:.3f} m³")
-            else:
-                decision_stats.append(f"{decision} {len(subset)} 行")
-
-        detail = "各决策状态：" + "  |  ".join(decision_stats)
-        detail += f"  |  备货合计 {total_order:.3f} m³  |  催发合计 {total_expedite:.3f} m³"
+        detail = f"备货合计 {total_order:.3f} m³  |  催发合计 {total_expedite:.3f} m³"
+        if self._filters_active():
+            detail += f"  |  当前筛选显示 {len(df)} 行"
         self._set_label(self.volume_detail_label, detail, "#475569")
 
     def refresh_display(self):
@@ -847,7 +906,8 @@ class InventoryDecisionSystem:
             )
             photo = self._photo_for_sku(row['Sku'])
             self._row_photos.append(photo)
-            row_tag = "even" if idx % 2 == 0 else "odd"
+            decision = row['决策建议']
+            row_tag = self._decision_tag(decision) if decision in DECISION_STYLES else "even"
             self.tree.insert("", "end", text="", image=photo, values=values, tags=(row_tag,))
 
         self.update_volume_displays(df)
