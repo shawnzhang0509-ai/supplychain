@@ -19,6 +19,10 @@ plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode M
 plt.rcParams['axes.unicode_minus'] = False
 
 CONFIG_FILE = "inventory_config.json"
+CHANNEL_SETTINGS_FILE = "channel_settings.json"
+CHANNEL_SETTINGS_TEMPLATE = "channel_settings.template.json"
+DEFAULT_LEAD_TIME = 90
+DEFAULT_LOGISTICS_TIME = 30
 CONTAINER_THRESHOLD = 69.0
 ERP_IMAGE_BASE = "https://ierpapi.ifurniture.co.nz/"
 IMAGE_THUMB_SIZE = (60, 60)
@@ -60,10 +64,22 @@ ERP_TABLE_HEAD = "#E8EEF5"
 ERP_STATUS_BG = "#FFF8E6"
 
 DECISION_STYLES = {
-    "下单备货": {"badge_bg": "#E53935", "badge_fg": "white", "row_bg": "#FFEBEE", "row_fg": "#B71C1C"},
-    "催促发货": {"badge_bg": "#FB8C00", "badge_fg": "white", "row_bg": "#FFF3E0", "row_fg": "#E65100"},
-    "保持现状": {"badge_bg": "#43A047", "badge_fg": "white", "row_bg": "#E8F5E9", "row_fg": "#2E7D32"},
-    "暂无销售": {"badge_bg": "#78909C", "badge_fg": "white", "row_bg": "#ECEFF1", "row_fg": "#546E7A"},
+    "下单备货": {
+        "badge_bg": "#E53935", "badge_fg": "white",
+        "row_bg": "#FFCDD2", "row_bg_alt": "#FFEBEE", "row_fg": "#B71C1C",
+    },
+    "催促发货": {
+        "badge_bg": "#FB8C00", "badge_fg": "white",
+        "row_bg": "#FFE0B2", "row_bg_alt": "#FFF8E1", "row_fg": "#E65100",
+    },
+    "保持现状": {
+        "badge_bg": "#43A047", "badge_fg": "white",
+        "row_bg": "#C8E6C9", "row_bg_alt": "#E8F5E9", "row_fg": "#2E7D32",
+    },
+    "暂无销售": {
+        "badge_bg": "#78909C", "badge_fg": "white",
+        "row_bg": "#CFD8DC", "row_bg_alt": "#ECEFF1", "row_fg": "#546E7A",
+    },
 }
 DECISION_ORDER = ["下单备货", "催促发货", "保持现状", "暂无销售"]
 
@@ -221,8 +237,97 @@ class InventoryDecisionSystem:
     def _set_label(self, label, text, color=ERP_TEXT):
         label.configure(text=text, fg=color)
 
-    def _decision_tag(self, decision):
-        return f"dec_{decision}"
+    def _decision_tag(self, decision, stripe=0):
+        if decision in DECISION_STYLES:
+            return f"dec_{decision}_{stripe % 2}"
+        return "even" if stripe % 2 == 0 else "odd"
+
+    def _channel_folder(self, channel):
+        return os.path.join(self.data_dir.get(), channel)
+
+    def _channel_settings_path(self, channel):
+        return os.path.join(self._channel_folder(channel), CHANNEL_SETTINGS_FILE)
+
+    def _default_channel_settings(self):
+        return {
+            "LeadTime": DEFAULT_LEAD_TIME,
+            "LogisticsTime": DEFAULT_LOGISTICS_TIME,
+            "备注": "",
+        }
+
+    def load_channel_settings(self, channel):
+        settings = self._default_channel_settings()
+        if not channel:
+            return settings
+        path = self._channel_settings_path(channel)
+        if not os.path.exists(path):
+            return settings
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data.get("LeadTime"), (int, float)):
+                settings["LeadTime"] = int(data["LeadTime"])
+            if isinstance(data.get("LogisticsTime"), (int, float)):
+                settings["LogisticsTime"] = int(data["LogisticsTime"])
+            if data.get("备注") is not None:
+                settings["备注"] = str(data.get("备注", ""))
+        except Exception:
+            pass
+        return settings
+
+    def apply_channel_settings(self, channel):
+        settings = self.load_channel_settings(channel)
+        self.lead_time.delete(0, tk.END)
+        self.lead_time.insert(0, str(settings["LeadTime"]))
+        self.logistics_time.delete(0, tk.END)
+        self.logistics_time.insert(0, str(settings["LogisticsTime"]))
+        return settings
+
+    def save_channel_settings(self, channel, lead_time=None, logistics_time=None, note=None):
+        if not channel:
+            return False
+        folder = self._channel_folder(channel)
+        os.makedirs(folder, exist_ok=True)
+        current = self.load_channel_settings(channel)
+        payload = {
+            "LeadTime": int(lead_time if lead_time is not None else self.lead_time.get()),
+            "LogisticsTime": int(logistics_time if logistics_time is not None else self.logistics_time.get()),
+            "备注": note if note is not None else current.get("备注", ""),
+        }
+        with open(self._channel_settings_path(channel), "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        return True
+
+    def get_channel_timing(self, channel, use_ui=False):
+        settings = self.load_channel_settings(channel)
+        if use_ui:
+            try:
+                settings["LeadTime"] = int(self.lead_time.get())
+                settings["LogisticsTime"] = int(self.logistics_time.get())
+            except ValueError:
+                pass
+        return int(settings["LeadTime"]), int(settings["LogisticsTime"])
+
+    def on_channel_changed(self):
+        channel = self.channel.get()
+        if channel:
+            self.apply_channel_settings(channel)
+        self.update_file_status()
+
+    def ensure_channel_settings_template(self):
+        data_dir = self.data_dir.get()
+        if not data_dir or not os.path.exists(data_dir):
+            return
+        template_path = os.path.join(data_dir, CHANNEL_SETTINGS_TEMPLATE)
+        if os.path.exists(template_path):
+            return
+        payload = {
+            "LeadTime": DEFAULT_LEAD_TIME,
+            "LogisticsTime": DEFAULT_LOGISTICS_TIME,
+            "备注": "LeadTime=采购交期(天)，LogisticsTime=物流周期(天)。复制到各渠道文件夹并重命名为 channel_settings.json。",
+        }
+        with open(template_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
 
     def _decision_badge_text(self, decision, subset):
         if decision == "下单备货":
@@ -347,7 +452,7 @@ class InventoryDecisionSystem:
         self._lbl(row1, "渠道").pack(side="left")
         self.channel_combo = ttk.Combobox(row1, textvariable=self.channel, width=10, state="readonly", style="ERP.TCombobox")
         self.channel_combo.pack(side="left", padx=(4, 4))
-        self.channel_combo.bind("<<ComboboxSelected>>", lambda _e: self.update_file_status())
+        self.channel_combo.bind("<<ComboboxSelected>>", lambda _e: self.on_channel_changed())
         self._erp_button(row1, "刷新", lambda: self.refresh_channels(), ERP_BTN_GREY, 5).pack(side="left", padx=(0, 14))
         self._lbl(row1, "Lead Time").pack(side="left")
         self.lead_time = ttk.Entry(row1, width=5, style="ERP.TEntry")
@@ -470,11 +575,12 @@ class InventoryDecisionSystem:
         self.tree.tag_configure("even", background=ERP_ROW_EVEN, foreground=ERP_TEXT)
         self.tree.tag_configure("odd", background=ERP_ROW_ODD, foreground=ERP_TEXT)
         for decision, style in DECISION_STYLES.items():
-            self.tree.tag_configure(
-                self._decision_tag(decision),
-                background=style["row_bg"],
-                foreground=style["row_fg"],
-            )
+            for stripe, bg_key in enumerate(("row_bg", "row_bg_alt")):
+                self.tree.tag_configure(
+                    self._decision_tag(decision, stripe),
+                    background=style[bg_key],
+                    foreground=style["row_fg"],
+                )
 
         footer = tk.Frame(self.root, bg=ERP_PANEL_BG, highlightbackground=ERP_BORDER, highlightthickness=1)
         footer.pack(fill="x", padx=8, pady=(0, 8))
@@ -485,8 +591,8 @@ class InventoryDecisionSystem:
         self.help_visible = tk.BooleanVar(value=False)
         self.help_frame = tk.Frame(self.root, bg=ERP_PANEL_BG, highlightbackground=ERP_BORDER, highlightthickness=1)
         help_text = (
-            "数据：stock.csv 需含 ImageUrl  |  PO.csv：无 ContainerNumber=在产，有 ContainerNumber=在途  |  "
-            "催促发货：现货+在途≤物流预估 且有在产（催工厂发货；在途已在路上不单独催）"
+            "数据：stock.csv 需含 ImageUrl  |  每渠道可放 channel_settings.json 自定义 LeadTime/物流天数  |  "
+            "PO：无 ContainerNumber=在产，有=在途  |  催促发货：现货+在途≤物流预估且有在产"
         )
         self.help_label = tk.Label(self.help_frame, text=help_text, justify="left",
                                    font=UI_FONT, fg=ERP_MUTED, bg=ERP_PANEL_BG)
@@ -597,11 +703,16 @@ class InventoryDecisionSystem:
                 messagebox.showerror("错误", "请先选择有效的数据根目录")
             return
         try:
-            channels = [d for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d))]
+            channels = [
+                d for d in os.listdir(data_dir)
+                if os.path.isdir(os.path.join(data_dir, d)) and not d.startswith((".", "_"))
+            ]
             channels.sort()
             self._set_combo_values(self.channel_combo, channels)
             if channels:
                 self.channel_combo.set(channels[0])
+                self.apply_channel_settings(channels[0])
+                self.ensure_channel_settings_template()
                 self.update_file_status()
             else:
                 self._set_label(self.file_status_label, "该目录下未找到子文件夹（渠道）", "#DC2626")
@@ -623,6 +734,16 @@ class InventoryDecisionSystem:
             symbol = "✓" if exists else "✗"
             status_lines.append(f"{symbol} {f}")
             if not exists: all_ready = False
+        settings = self.load_channel_settings(ch)
+        settings_path = self._channel_settings_path(ch)
+        if os.path.exists(settings_path):
+            status_lines.append(
+                f"✓ {CHANNEL_SETTINGS_FILE} (LT {settings['LeadTime']} / 物流 {settings['LogisticsTime']})"
+            )
+        else:
+            status_lines.append(
+                f"○ {CHANNEL_SETTINGS_FILE} 未配置，使用默认 LT {settings['LeadTime']} / 物流 {settings['LogisticsTime']}"
+            )
         self._set_label(self.file_status_label, "  |  ".join(status_lines),
                         "#16A34A" if all_ready else "#DC2626")
         return all_ready
@@ -907,7 +1028,7 @@ class InventoryDecisionSystem:
             photo = self._photo_for_sku(row['Sku'])
             self._row_photos.append(photo)
             decision = row['决策建议']
-            row_tag = self._decision_tag(decision) if decision in DECISION_STYLES else "even"
+            row_tag = self._decision_tag(decision, idx)
             self.tree.insert("", "end", text="", image=photo, values=values, tags=(row_tag,))
 
         self.update_volume_displays(df)
@@ -972,7 +1093,10 @@ class InventoryDecisionSystem:
             return
 
         try:
-            all_channels = [d for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d))]
+            all_channels = [
+                d for d in os.listdir(data_dir)
+                if os.path.isdir(os.path.join(data_dir, d)) and not d.startswith((".", "_"))
+            ]
             all_channels.sort()
         except Exception as e:
             self._set_label(self.summary_label, f"读取渠道列表失败: {e}")
@@ -1008,6 +1132,7 @@ class InventoryDecisionSystem:
         except Exception:
             pass
 
+        self.apply_channel_settings(ch)
         self.update_file_status()
         self._set_label(self.summary_label,
                         f"正在扫描 [{ch}] ({self._scan_channel_index + 1}/{len(self._all_channels)})...")
@@ -1278,8 +1403,14 @@ class InventoryDecisionSystem:
             df_before = len(df)
             df = df[df['IsDiscontinued'] != 1].copy()
 
-            lt_days = int(self.lead_time.get())
-            log_days = int(self.logistics_time.get())
+            lt_days, log_days = self.get_channel_timing(
+                target_channel,
+                use_ui=(channel_override is None),
+            )
+            try:
+                self.save_channel_settings(target_channel, lead_time=lt_days, logistics_time=log_days)
+            except (ValueError, OSError):
+                pass
             df['LT预估'] = df['日均需求'] * lt_days
             df['物流预估'] = df['日均需求'] * log_days
 
