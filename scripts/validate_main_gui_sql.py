@@ -22,22 +22,37 @@ FORBIDDEN_PATTERNS = [
     (re.compile(r"<>"), "<>"),
     (re.compile(r"TransferType\s+'Order'"), "TransferType 'Order' (corrupted <> operator)"),
     (re.compile(r"GETDATE\(\)\s+0\s+THEN"), "GETDATE() 0 THEN (corrupted < operator)"),
+    (re.compile(r"GETDATE\(\)\s+DATEADD"), "GETDATE() DATEADD (missing operator after GETDATE())"),
+    (re.compile(r"\brn\s+3\b"), "rn 3 (corrupted <= 3)"),
+    (re.compile(r"SampleEnd\s+cw\.SampleStart"), "SampleEnd cw.SampleStart (corrupted comparison)"),
 ]
+
+TRANSFER_EXCLUSION = re.compile(
+    r"(?:NOT\s*\(\s*t\.TransferType\s*=\s*'Order'\s*\)|"
+    r"CASE\s+WHEN\s+t\.TransferType\s*=\s*'Order'\s+THEN\s+0\s+ELSE\s+1\s+END\s*=\s*1)"
+)
 
 REQUIRED_BY_FILE = {
     "sales 8-30.txt": [
         (re.compile(r"DATEADD\(day,\s*8,\s*ck\.CheckinDate\)\s+AS\s+SampleStart"), "8-30 SampleStart (+8 days)"),
         (re.compile(r"N'8-30'\s+AS\s+WindowType"), "WindowType = 8-30"),
-        (re.compile(r"NOT\s*\(\s*t\.TransferType\s*=\s*'Order'\s*\)"), "Transfer exclusion"),
+        (re.compile(r"CAST\(GETDATE\(\) AS DATE\) BETWEEN DATEADD"), "safe GETDATE() window check"),
+        (re.compile(r"WHERE ck\.rn BETWEEN 1 AND 3"), "safe rn filter"),
     ],
     "sales 30.txt": [
         (re.compile(r"DATEADD\(day,\s*1,\s*ck\.CheckinDate\)\s+AS\s+SampleStart"), "30 SampleStart (+1 day)"),
         (re.compile(r"N'30'\s+AS\s+WindowType"), "WindowType = 30"),
-        (re.compile(r"NOT\s*\(\s*t\.TransferType\s*=\s*'Order'\s*\)"), "Transfer exclusion"),
+        (re.compile(r"CAST\(GETDATE\(\) AS DATE\) BETWEEN DATEADD"), "safe GETDATE() window check"),
+        (re.compile(r"WHERE ck\.rn BETWEEN 1 AND 3"), "safe rn filter"),
     ],
     "sales 15.txt": [
         (re.compile(r"N'15'\s+AS\s+WindowType"), "WindowType = 15"),
-        (re.compile(r"NOT\s*\(\s*t\.TransferType\s*=\s*'Order'\s*\)"), "Transfer exclusion"),
+        (re.compile(r"CAST\(GETDATE\(\) AS DATE\) BETWEEN DATEADD"), "safe GETDATE() window check"),
+        (re.compile(r"WHERE re\.rn BETWEEN 1 AND 3"), "safe rn filter"),
+    ],
+    "sales 8-30-po-only.txt": [
+        (re.compile(r"DATEADD\(day,\s*8,\s*ck\.CheckinDate\)\s+AS\s+SampleStart"), "8-30 SampleStart (+8 days)"),
+        (re.compile(r"N'8-30'\s+AS\s+WindowType"), "WindowType = 8-30"),
     ],
 }
 
@@ -73,6 +88,13 @@ def validate_file(path: Path) -> list[str]:
             for pattern, label in checks:
                 if not pattern.search(text):
                     errors.append(f"missing required pattern: {label}")
+
+    if path.name.lower() in ("sales 8-30.txt", "sales 30.txt", "sales 15.txt"):
+        if not TRANSFER_EXCLUSION.search(text):
+            errors.append("missing Transfer exclusion (CASE WHEN ... OR NOT (...))")
+
+    if path.name.lower() == "sales 8-30-po-only.txt" and re.search(r"dbo\.Transfers", text, flags=re.IGNORECASE):
+        errors.append("po-only template must not reference dbo.Transfers")
 
     if path.name.lower() in ("sales 8-30.txt", "sales 30.txt"):
         if "AvgDailyDemand_3Checkins_Avg" not in text:

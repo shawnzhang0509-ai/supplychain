@@ -95,7 +95,7 @@ RestockEvents_Raw AS (
       AND w_source.Name = 'CHCH in transit'
       AND t.TransferJobStatus = 'Completed'
       AND p.Sku LIKE '{sku}%'
-      AND NOT (t.TransferType = 'Order')
+      AND CASE WHEN t.TransferType = 'Order' THEN 0 ELSE 1 END = 1
 ),
 
 -- 同一天同地区多次到港（多柜）合并为一次补货事件
@@ -200,8 +200,8 @@ FinalResult AS (
         -- 主指标：排除「未满30天的最近一次」，避免拉低整体
         AVG(
             CASE
-                WHEN NOT (scp.rn = 1 AND scp.IsPartialPeriod = 1)
-                THEN scp.SingleAvg_Daily
+                WHEN scp.rn = 1 AND scp.IsPartialPeriod = 1 THEN NULL
+                ELSE scp.SingleAvg_Daily
             END
         ) OVER (PARTITION BY scp.Sku, scp.Region) AS AvgDailyDemand_3Checkins_Avg,
 
