@@ -1,0 +1,3 @@
+Sku,Name,ProductFamily,PriceRadarVolume,IsDiscontinued,SouthIslandStock,NorthIslandStock
+SKU001,Product A,FamilyX,0.01,0,10,5
+SKU002,Product B,FamilyY,0.02,0,20,15

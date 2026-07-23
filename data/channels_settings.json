@@ -1,20 +1,20 @@
 {
-  "_说明": "本文件放在数据根目录(output)。每个 channels 键名=SKU渠道文件夹名，用于控制该渠道的 LT预估 和 物流预估 计算天数。",
+  "_说明": "放在数据根目录(output)。channels 键名=SKU渠道子文件夹名(如918、996)。LeadTime=LT预估天数，LogisticsTime=物流预估天数。",
   "default": {
     "LeadTime": 90,
     "LogisticsTime": 30,
-    "备注": "默认参数"
+    "备注": "未单独配置的渠道使用 default"
   },
   "channels": {
-    "test918": {
-      "LeadTime": 60,
-      "LogisticsTime": 20,
-      "备注": "仓库内测试文件夹，真实环境请改成 918、996 等实际 SKU 文件夹名"
+    "918": {
+      "LeadTime": 90,
+      "LogisticsTime": 30,
+      "备注": "未单独配置的渠道使用 default"
     },
-    "996": {
-      "LeadTime": 100,
-      "LogisticsTime": 25,
-      "备注": "x"
+    "test918": {
+      "LeadTime": 90,
+      "LogisticsTime": 30,
+      "备注": "未单独配置的渠道使用 default"
     }
   }
 }

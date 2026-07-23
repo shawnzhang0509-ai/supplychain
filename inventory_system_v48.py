@@ -332,11 +332,60 @@ class InventoryDecisionSystem:
         document = self._load_channels_settings_document(data_dir)
         default = document["default"]
         channels = self._list_channel_folders(data_dir)
+        merged = {}
         for channel in channels:
-            if channel not in document["channels"]:
-                document["channels"][channel] = self._normalize_channel_entry({}, default)
+            if channel in document["channels"]:
+                merged[channel] = self._normalize_channel_entry(document["channels"][channel], default)
+            else:
+                merged[channel] = self._normalize_channel_entry({}, default)
+        document["channels"] = merged
+        document["_说明"] = (
+            "放在数据根目录(output)。channels 键名=SKU渠道子文件夹名(如918、996)。"
+            "LeadTime=LT预估天数，LogisticsTime=物流预估天数。修改后切换渠道或点刷新生效。"
+        )
         self._save_channels_settings_document(document, data_dir)
         return document
+
+    def generate_channels_settings(self):
+        data_dir = self.data_dir.get()
+        if not data_dir or not os.path.exists(data_dir):
+            messagebox.showerror("错误", "请先选择有效的数据根目录（output 文件夹）")
+            return
+        channels = self._list_channel_folders(data_dir)
+        if not channels:
+            messagebox.showerror("错误", "该目录下未找到任何 SKU 渠道子文件夹")
+            return
+        self.ensure_channels_settings_template(data_dir)
+        document = self.sync_channels_settings(data_dir)
+        settings_path = self._channels_settings_path(data_dir)
+        channel = self.channel.get()
+        if channel:
+            self.apply_channel_settings(channel)
+        self.update_file_status()
+        preview = "\n".join(
+            f"  · {name}: LT {document['channels'][name]['LeadTime']} / 物流 {document['channels'][name]['LogisticsTime']}"
+            for name in channels[:12]
+        )
+        if len(channels) > 12:
+            preview += f"\n  · ... 共 {len(channels)} 个渠道"
+        messagebox.showinfo(
+            "渠道配置已生成",
+            f"已写入：\n{settings_path}\n\n"
+            f"共扫描 {len(channels)} 个 SKU 渠道文件夹。\n"
+            f"请用记事本打开上述文件，按需修改各渠道的 LeadTime / LogisticsTime。\n\n"
+            f"预览：\n{preview}",
+        )
+        try:
+            if sys.platform.startswith("win"):
+                os.startfile(settings_path)  # noqa: S606
+            elif sys.platform == "darwin":
+                import subprocess
+                subprocess.Popen(["open", settings_path])
+            else:
+                import subprocess
+                subprocess.Popen(["xdg-open", settings_path])
+        except Exception:
+            pass
 
     def load_channel_settings(self, channel):
         if not channel:
@@ -541,7 +590,8 @@ class InventoryDecisionSystem:
         self.channel_combo = ttk.Combobox(row1, textvariable=self.channel, width=10, state="readonly", style="ERP.TCombobox")
         self.channel_combo.pack(side="left", padx=(4, 4))
         self.channel_combo.bind("<<ComboboxSelected>>", lambda _e: self.on_channel_changed())
-        self._erp_button(row1, "刷新", lambda: self.refresh_channels(), ERP_BTN_GREY, 5).pack(side="left", padx=(0, 14))
+        self._erp_button(row1, "刷新", lambda: self.refresh_channels(), ERP_BTN_GREY, 5).pack(side="left", padx=(0, 6))
+        self._erp_button(row1, "更新渠道配置", self.generate_channels_settings, ERP_BTN_BLUE, 10).pack(side="left", padx=(0, 14))
         self._lbl(row1, "Lead Time").pack(side="left")
         self.lead_time = ttk.Entry(row1, width=5, style="ERP.TEntry")
         self.lead_time.insert(0, "90")
