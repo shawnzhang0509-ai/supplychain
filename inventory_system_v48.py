@@ -413,8 +413,8 @@ class InventoryDecisionSystem:
         self.help_visible = tk.BooleanVar(value=False)
         self.help_frame = tk.Frame(self.root, bg=ERP_PANEL_BG, highlightbackground=ERP_BORDER, highlightthickness=1)
         help_text = (
-            "数据：stock.csv 需含 ImageUrl  |  PO.csv：无 ContainerNumber=在产，有 ContainerNumber 且未入库=在途  |  "
-            "催促发货：现货≤物流预估 且 在途≥物流预估（在途不足则不催）"
+            "数据：stock.csv 需含 ImageUrl  |  PO.csv：无 ContainerNumber=在产，有 ContainerNumber=在途  |  "
+            "催促发货：总量>LT预估 且 在产≥物流预估（催工厂发货；在途已在路上不催）"
         )
         self.help_label = tk.Label(self.help_frame, text=help_text, justify="left",
                                    font=UI_FONT, fg=ERP_MUTED, bg=ERP_PANEL_BG)
@@ -797,8 +797,8 @@ class InventoryDecisionSystem:
                 decision_stats.append(f"{decision} {len(subset)} 行 / 备货 {vol:.3f} m³")
             elif decision == "催促发货":
                 vol = subset['催发货体积'].sum()
-                transit = subset['在途库存'].sum()
-                decision_stats.append(f"{decision} {len(subset)} 行 / 在途 {transit:.0f} 件 / 催发 {vol:.3f} m³")
+                production = subset['在产库存'].sum()
+                decision_stats.append(f"{decision} {len(subset)} 行 / 在产 {production:.0f} 件 / 催发 {vol:.3f} m³")
             else:
                 decision_stats.append(f"{decision} {len(subset)} 行")
 
@@ -1242,22 +1242,18 @@ class InventoryDecisionSystem:
                     order_vol = order_qty * price_vol
                     return ("下单备货", order_qty, order_vol,
                            f"总库存{total:.0f}≤{lt_days}天需求({lt_need:.1f})，缺口{order_qty:.0f}，体积{order_vol:.4f}m³，基于{source}")
-                elif in_stock <= log_need and transit > 0 and transit >= log_need:
-                    days = in_stock / daily if daily > 0 else 0
-                    expedite_vol = transit * price_vol
+                elif production >= log_need:
+                    expedite_vol = production * price_vol
                     return ("催促发货", 0, 0,
-                           f"现货{in_stock:.0f}≤{log_days}天需求({log_need:.1f})，仅够{days:.0f}天，"
-                           f"在途{transit:.0f}≥物流需求，需催到港，催发货体积{expedite_vol:.4f}m³")
+                           f"总量{total:.0f}>{lt_days}天需求({lt_need:.1f})，"
+                           f"在产{production:.0f}≥{log_days}天物流需求({log_need:.1f})，需催工厂发货，"
+                           f"催发货体积{expedite_vol:.4f}m³")
                 else:
                     days = total / daily if daily > 0 else 0
-                    if in_stock <= log_need and transit > 0 and transit < log_need:
+                    if production > 0 and production < log_need:
                         return ("保持现状", 0, 0,
-                               f"现货{in_stock:.0f}≤{log_days}天需求({log_need:.1f})，"
-                               f"在途{transit:.0f}<物流需求({log_need:.1f})，催发无效，总库存可撑{days:.0f}天")
-                    if in_stock <= log_need and production > 0:
-                        return ("保持现状", 0, 0,
-                               f"现货{in_stock:.0f}≤{log_days}天需求({log_need:.1f})，无在途可催，"
-                               f"在产{production:.0f}件未到柜，总库存可撑{days:.0f}天")
+                               f"在产{production:.0f}<{log_days}天物流需求({log_need:.1f})，"
+                               f"暂无需催，总库存可撑{days:.0f}天")
                     return ("保持现状", 0, 0,
                            f"库存充足(现货{in_stock:.0f}+在途{transit:.0f}+在产{production:.0f})，基于{source}可撑{days:.0f}天")
 
@@ -1269,7 +1265,7 @@ class InventoryDecisionSystem:
             df['催发货体积'] = 0.0
             expedite_mask = df['决策建议'] == '催促发货'
             df.loc[expedite_mask, '催发货体积'] = (
-                df.loc[expedite_mask, '在途库存'] * df.loc[expedite_mask, 'PriceRadarVolume']
+                df.loc[expedite_mask, '在产库存'] * df.loc[expedite_mask, 'PriceRadarVolume']
             )
 
             priority = {"下单备货": 0, "催促发货": 1, "保持现状": 2, "暂无销售": 3}
