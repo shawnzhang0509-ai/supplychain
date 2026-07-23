@@ -414,7 +414,7 @@ class InventoryDecisionSystem:
         self.help_frame = tk.Frame(self.root, bg=ERP_PANEL_BG, highlightbackground=ERP_BORDER, highlightthickness=1)
         help_text = (
             "数据：stock.csv 需含 ImageUrl  |  PO.csv：无 ContainerNumber=在产，有 ContainerNumber 且未入库=在途  |  "
-            "催促发货仅在现货≤物流预估且有在途库存时触发"
+            "催促发货：现货≤物流预估 且 在途≥物流预估（在途不足则不催）"
         )
         self.help_label = tk.Label(self.help_frame, text=help_text, justify="left",
                                    font=UI_FONT, fg=ERP_MUTED, bg=ERP_PANEL_BG)
@@ -1242,14 +1242,18 @@ class InventoryDecisionSystem:
                     order_vol = order_qty * price_vol
                     return ("下单备货", order_qty, order_vol,
                            f"总库存{total:.0f}≤{lt_days}天需求({lt_need:.1f})，缺口{order_qty:.0f}，体积{order_vol:.4f}m³，基于{source}")
-                elif in_stock <= log_need and transit > 0:
-                    days = in_stock / daily
+                elif in_stock <= log_need and transit > 0 and transit >= log_need:
+                    days = in_stock / daily if daily > 0 else 0
                     expedite_vol = transit * price_vol
                     return ("催促发货", 0, 0,
                            f"现货{in_stock:.0f}≤{log_days}天需求({log_need:.1f})，仅够{days:.0f}天，"
-                           f"需催{transit:.0f}件到港，催发货体积{expedite_vol:.4f}m³")
+                           f"在途{transit:.0f}≥物流需求，需催到港，催发货体积{expedite_vol:.4f}m³")
                 else:
-                    days = total / daily
+                    days = total / daily if daily > 0 else 0
+                    if in_stock <= log_need and transit > 0 and transit < log_need:
+                        return ("保持现状", 0, 0,
+                               f"现货{in_stock:.0f}≤{log_days}天需求({log_need:.1f})，"
+                               f"在途{transit:.0f}<物流需求({log_need:.1f})，催发无效，总库存可撑{days:.0f}天")
                     if in_stock <= log_need and production > 0:
                         return ("保持现状", 0, 0,
                                f"现货{in_stock:.0f}≤{log_days}天需求({log_need:.1f})，无在途可催，"
