@@ -91,7 +91,7 @@ DECISION_ORDER = ["下单备货", "催促发货", "保持现状", "暂无销售"
 class InventoryDecisionSystem:
     def __init__(self, root):
         self.root = root
-        self.root.title("智能库存决策系统 V4.8")
+        self.root.title(f"智能库存决策系统 V{APP_VERSION}")
         self.root.geometry("1620x920")
         self.root.minsize(1200, 720)
         self.root.configure(bg=ERP_PAGE_BG)
@@ -477,6 +477,7 @@ class InventoryDecisionSystem:
         self.lead_time.insert(0, str(settings["LeadTime"]))
         self.logistics_time.delete(0, tk.END)
         self.logistics_time.insert(0, str(settings["LogisticsTime"]))
+        self._last_channel_settings = settings
         return settings
 
     def save_channel_settings(self, channel, lead_time=None, logistics_time=None, note=None):
@@ -660,7 +661,7 @@ class InventoryDecisionSystem:
         header.pack(fill="x")
         header_inner = self._frame(header, ERP_HEADER_BG)
         header_inner.pack(fill="x", padx=10, pady=8)
-        tk.Label(header_inner, text="智能库存决策系统 V4.8", font=UI_TITLE_FONT,
+        tk.Label(header_inner, text=f"智能库存决策系统 V{APP_VERSION}", font=UI_TITLE_FONT,
                  bg=ERP_HEADER_BG, fg="white").pack(side="left")
         tk.Label(header_inner, text="库存决策 · 订柜监控", font=UI_FONT,
                  bg=ERP_HEADER_BG, fg="#DCEBFF").pack(side="left", padx=(12, 0))
@@ -957,7 +958,7 @@ class InventoryDecisionSystem:
             return False
         folder = os.path.join(dir_path, ch)
         required_files = ["stock.csv", "PO.csv", "Sales 8-30.csv", "Sales 15.csv", "Sales 30.csv"]
-        status_lines = [f"当前渠道 [{ch}] 文件检查："]
+        status_lines = [f"程序 V{APP_VERSION}  |  当前渠道 [{ch}] 文件检查："]
         all_ready = True
         for f in required_files:
             exists = os.path.exists(os.path.join(folder, f))
