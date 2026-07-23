@@ -295,29 +295,34 @@ class InventoryDecisionSystem:
             loaded = json.load(handle)
         return self._parse_channels_settings_payload(loaded)
 
-    def migrate_channels_settings(self, data_dir=None):
+    def migrate_channels_settings(self, data_dir=None, force=False):
+        """Only bootstrap channels_settings.json when it does not exist yet."""
         data_dir = data_dir or self.data_dir.get()
         if not data_dir or not os.path.exists(data_dir):
             return None, None
         primary = self._channels_settings_path(data_dir)
-        candidates = []
-        if os.path.exists(primary):
-            candidates.append((primary, os.path.getmtime(primary)))
+        if os.path.exists(primary) and not force:
+            return primary, CHANNELS_SETTINGS_FILE
+
+        source_path = None
         for path in self._legacy_settings_paths(data_dir):
             if not os.path.exists(path):
                 continue
             try:
                 with open(path, "r", encoding="utf-8") as handle:
                     loaded = json.load(handle)
-                if isinstance(loaded, dict) and isinstance(loaded.get("channels"), dict):
-                    candidates.append((path, os.path.getmtime(path)))
+                if isinstance(loaded, dict) and (
+                    isinstance(loaded.get("channels"), dict) or "LeadTime" in loaded
+                ):
+                    source_path = path
+                    break
             except Exception:
                 continue
-        if not candidates:
+        if not source_path:
             return None, None
-        newest_path, _ = max(candidates, key=lambda item: item[1])
+
         try:
-            document = self._read_channels_settings_file(newest_path)
+            document = self._read_channels_settings_file(source_path)
         except Exception:
             return None, None
         channels = self._list_channel_folders(data_dir)
@@ -327,10 +332,7 @@ class InventoryDecisionSystem:
             for channel in channels
         }
         self._save_channels_settings_document(document, data_dir)
-        source_name = os.path.basename(newest_path)
-        if newest_path != primary:
-            return primary, source_name
-        return primary, CHANNELS_SETTINGS_FILE
+        return primary, os.path.basename(source_path)
 
     def _default_channel_settings(self):
         return {
@@ -371,7 +373,6 @@ class InventoryDecisionSystem:
         }
         if not data_dir:
             return document
-        self.migrate_channels_settings(data_dir)
         path = self._channels_settings_path(data_dir)
         if not os.path.exists(path):
             return document
@@ -420,6 +421,8 @@ class InventoryDecisionSystem:
             messagebox.showerror("错误", "该目录下未找到任何 SKU 渠道子文件夹")
             return
         self.ensure_channels_settings_template(data_dir)
+        if not os.path.exists(self._channels_settings_path(data_dir)):
+            self.migrate_channels_settings(data_dir)
         document = self.sync_channels_settings(data_dir)
         settings_path = self._channels_settings_path(data_dir)
         channel = self.channel.get()
@@ -499,10 +502,33 @@ class InventoryDecisionSystem:
                 pass
         return int(settings["LeadTime"]), int(settings["LogisticsTime"])
 
+    def save_current_channel_settings(self):
+        channel = self.channel.get()
+        if not channel:
+            messagebox.showerror("错误", "请先选择渠道")
+            return
+        try:
+            lead_time = int(self.lead_time.get())
+            logistics_time = int(self.logistics_time.get())
+        except ValueError:
+            messagebox.showerror("错误", "Lead Time 和 物流 必须是整数")
+            return
+        if not self.data_dir.get():
+            messagebox.showerror("错误", "请先选择数据根目录")
+            return
+        if not os.path.exists(self._channels_settings_path()):
+            self.sync_channels_settings()
+        self.save_channel_settings(channel, lead_time=lead_time, logistics_time=logistics_time)
+        self.update_file_status()
+        messagebox.showinfo(
+            "已保存",
+            f"渠道 [{channel}] 参数已写入：\n{self._channels_settings_path()}\n\n"
+            f"LT {lead_time} / 物流 {logistics_time}",
+        )
+
     def on_channel_changed(self):
         channel = self.channel.get()
         if channel:
-            self.migrate_channels_settings()
             self.apply_channel_settings(channel)
         self.update_file_status()
 
@@ -664,7 +690,8 @@ class InventoryDecisionSystem:
         self._lbl(row1, "物流").pack(side="left")
         self.logistics_time = ttk.Entry(row1, width=5, style="ERP.TEntry")
         self.logistics_time.insert(0, "30")
-        self.logistics_time.pack(side="left", padx=(4, 14))
+        self.logistics_time.pack(side="left", padx=(4, 6))
+        self._erp_button(row1, "保存参数", self.save_current_channel_settings, ERP_BTN_GREY, 7).pack(side="left", padx=(0, 14))
         self._lbl(row1, "扫描(分)").pack(side="left")
         self.interval_entry = ttk.Entry(row1, width=5, style="ERP.TEntry")
         self.interval_entry.insert(0, str(self.auto_scan_interval))
@@ -909,7 +936,9 @@ class InventoryDecisionSystem:
             channels = self._list_channel_folders(data_dir)
             self._set_combo_values(self.channel_combo, channels)
             if channels:
-                self.ensure_channels_settings_template(data_dir)
+                settings_path = self._channels_settings_path(data_dir)
+                if not os.path.exists(settings_path):
+                    self.migrate_channels_settings(data_dir)
                 self.sync_channels_settings(data_dir)
                 self.channel_combo.set(channels[0])
                 self.apply_channel_settings(channels[0])
@@ -936,15 +965,9 @@ class InventoryDecisionSystem:
             if not exists: all_ready = False
         settings = self.load_channel_settings(ch)
         settings_path = self._channels_settings_path(dir_path)
-        migrated_path, migrated_from = self.migrate_channels_settings(dir_path)
-        if migrated_path and os.path.exists(migrated_path):
-            settings = self.load_channel_settings(ch)
-            if migrated_from and migrated_from != CHANNELS_SETTINGS_FILE:
-                status_lines.append(
-                    f"✓ 已从 {migrated_from} 生成 {CHANNELS_SETTINGS_FILE} · "
-                    f"[{ch}] LT {settings['LeadTime']} / 物流 {settings['LogisticsTime']}"
-                )
-            elif ch in self._load_channels_settings_document(dir_path).get("channels", {}):
+        if os.path.exists(settings_path):
+            document = self._load_channels_settings_document(dir_path)
+            if ch in document.get("channels", {}):
                 status_lines.append(
                     f"✓ {CHANNELS_SETTINGS_FILE} · [{ch}] LT {settings['LeadTime']} / 物流 {settings['LogisticsTime']}"
                 )
@@ -954,8 +977,10 @@ class InventoryDecisionSystem:
                     f"使用 default LT {settings['LeadTime']} / 物流 {settings['LogisticsTime']}"
                 )
         else:
+            legacy_exists = any(os.path.exists(p) for p in self._legacy_settings_paths(dir_path))
+            hint = "（请点「更新渠道配置」从模板生成）" if legacy_exists else "（请点「更新渠道配置」生成）"
             status_lines.append(
-                f"○ 未找到 {CHANNELS_SETTINGS_FILE}（请点「更新渠道配置」生成；不要只改 template 文件）· "
+                f"○ 未找到 {CHANNELS_SETTINGS_FILE}{hint} · "
                 f"[{ch}] 默认 LT {settings['LeadTime']} / 物流 {settings['LogisticsTime']}"
             )
         self._set_label(self.file_status_label, "  |  ".join(status_lines),
@@ -1617,10 +1642,6 @@ class InventoryDecisionSystem:
                 target_channel,
                 use_ui=(channel_override is None),
             )
-            try:
-                self.save_channel_settings(target_channel, lead_time=lt_days, logistics_time=log_days)
-            except (ValueError, OSError):
-                pass
             df['LT预估'] = df['日均需求'] * lt_days
             df['物流预估'] = df['日均需求'] * log_days
 
