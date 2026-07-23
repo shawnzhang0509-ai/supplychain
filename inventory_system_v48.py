@@ -19,6 +19,7 @@ plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode M
 plt.rcParams['axes.unicode_minus'] = False
 
 CONFIG_FILE = "inventory_config.json"
+APP_VERSION = "4.8.1"
 CHANNELS_SETTINGS_FILE = "channels_settings.json"
 CHANNELS_SETTINGS_TEMPLATE = "channels_settings.template.json"
 LEGACY_CHANNELS_SETTINGS_FILES = (
