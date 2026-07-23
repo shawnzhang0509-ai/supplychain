@@ -19,7 +19,7 @@ plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode M
 plt.rcParams['axes.unicode_minus'] = False
 
 CONFIG_FILE = "inventory_config.json"
-APP_VERSION = "4.8.1"
+APP_VERSION = "4.8.2"
 CHANNELS_SETTINGS_FILE = "channels_settings.json"
 CHANNELS_SETTINGS_TEMPLATE = "channels_settings.template.json"
 LEGACY_CHANNELS_SETTINGS_FILES = (
@@ -41,7 +41,8 @@ COL_MAP = {
     "总量库存": "总量库存", "8-30天": "需求_8_30天", "15天": "需求_15天", "30天": "需求_30天",
     "采用需求": "日均需求", "需求来源": "需求来源", "LT预估": "LT预估", "物流预估": "物流预估",
     "决策建议": "决策建议", "建议订货量": "建议订货量", "体积系数": "PriceRadarVolume",
-    "备货体积": "备货体积", "催发货体积": "催发货体积", "详细说明": "详细说明"
+    "备货体积": "备货体积", "催发货数量": "催发货数量", "催发货体积": "催发货体积", "详细说明": "详细说明",
+    "渠道": "渠道",
 }
 SORT_OPTIONS = ["（无）"] + list(COL_MAP.keys())
 
@@ -123,6 +124,7 @@ class InventoryDecisionSystem:
         self._row_photos = []
         self._placeholder_photo = None
         self._preload_status = ""
+        self.accumulate_mode = tk.BooleanVar(value=False)
 
         self.auto_scanning = False
         self.scan_job_id = None
@@ -564,19 +566,19 @@ class InventoryDecisionSystem:
             vol = subset["备货体积"].sum()
             return f" {decision}  {len(subset)}行 · 备货 {vol:.3f} m³ "
         if decision == "催促发货":
+            qty = subset["催发货数量"].sum()
             vol = subset["催发货体积"].sum()
-            production = subset["在产库存"].sum()
-            return f" {decision}  {len(subset)}行 · 在产 {production:.0f}件 · 催发 {vol:.3f} m³ "
+            return f" {decision}  {len(subset)}行 · 催发 {qty:.0f}件 · {vol:.3f} m³ "
         return f" {decision}  {len(subset)}行 "
 
     def _update_decision_badges(self, df):
         for widget in self.decision_badge_frame.winfo_children():
             widget.destroy()
-        if self.result_data is None:
+        if df is None or len(df) == 0:
             return
         active = self.filter_decision.get()
         for decision in DECISION_ORDER:
-            subset = self.result_data[self.result_data["决策建议"] == decision]
+            subset = df[df["决策建议"] == decision]
             if len(subset) == 0:
                 continue
             style = DECISION_STYLES[decision]
@@ -598,6 +600,30 @@ class InventoryDecisionSystem:
             badge.pack(side="left", padx=(0, 8), pady=2)
             badge.bind("<Button-1>", lambda _e, d=decision: self._on_decision_badge_click(d))
 
+    def _update_decision_legend(self):
+        for widget in self.decision_legend_frame.winfo_children():
+            widget.destroy()
+        active = self.filter_decision.get()
+        tk.Label(self.decision_legend_frame, text="筛选：", font=UI_FONT, fg=ERP_MUTED,
+                 bg=ERP_PANEL_BG).pack(side="left", padx=(0, 4))
+        for decision in DECISION_ORDER:
+            style = DECISION_STYLES[decision]
+            is_active = active == decision
+            badge = tk.Label(
+                self.decision_legend_frame,
+                text=f" {decision} ",
+                font=UI_FONT_BOLD if is_active else UI_FONT,
+                bg=style["badge_bg"],
+                fg=style["badge_fg"],
+                padx=4,
+                pady=1,
+                cursor="hand2",
+                relief="solid",
+                borderwidth=2 if is_active else 0,
+            )
+            badge.pack(side="left", padx=(0, 4))
+            badge.bind("<Button-1>", lambda _e, d=decision: self._on_decision_badge_click(d))
+
     def _on_decision_badge_click(self, decision):
         if self.filter_decision.get() == decision:
             self.filter_decision.set("全部")
@@ -605,6 +631,16 @@ class InventoryDecisionSystem:
             self.filter_decision.set(decision)
         self.decision_combo.set(self.filter_decision.get())
         self.refresh_display()
+
+    def _on_accumulate_mode_toggle(self):
+        if not self.accumulate_mode.get():
+            return
+        if self.result_data is not None and len(self.result_data) > 0:
+            channels = self.result_data["渠道"].unique().tolist() if "渠道" in self.result_data.columns else []
+            hint = f"已保留 {len(self.result_data)} 行"
+            if channels:
+                hint += f"（{', '.join(str(c) for c in channels)}）"
+            self._set_label(self.summary_label, f"累加模式已开启 · {hint} · 切换渠道分析将追加数据")
 
     def _family_matches(self, query):
         query = (query or "").strip()
@@ -667,6 +703,13 @@ class InventoryDecisionSystem:
                  bg=ERP_HEADER_BG, fg="#DCEBFF").pack(side="left", padx=(12, 0))
         btn_box = self._frame(header_inner, ERP_HEADER_BG)
         btn_box.pack(side="right")
+        self.accumulate_btn = tk.Checkbutton(
+            btn_box, text="累加模式", variable=self.accumulate_mode,
+            font=UI_FONT, bg=ERP_HEADER_BG, fg="white", selectcolor=ERP_BTN_BLUE,
+            activebackground=ERP_HEADER_BG, activeforeground="white",
+            command=self._on_accumulate_mode_toggle,
+        )
+        self.accumulate_btn.pack(side="left", padx=(0, 10))
         self._erp_button(btn_box, "生成分析报告", self.generate_analysis, ERP_BTN_GREEN, 12).pack(side="left", padx=(0, 6))
         self._erp_button(btn_box, "导出 Excel", self.export_excel, ERP_BTN_BLUE, 10).pack(side="left")
 
@@ -772,26 +815,23 @@ class InventoryDecisionSystem:
         self._lbl(head, "（点击表头排序，Shift+点击设次排序）", fg=ERP_MUTED).pack(side="left", padx=(8, 12))
         self.decision_legend_frame = tk.Frame(head, bg=ERP_PANEL_BG)
         self.decision_legend_frame.pack(side="left")
-        for decision in DECISION_ORDER:
-            style = DECISION_STYLES[decision]
-            tk.Label(self.decision_legend_frame, text=f" {decision} ", font=UI_FONT,
-                     bg=style["badge_bg"], fg=style["badge_fg"], padx=4, pady=1).pack(side="left", padx=(0, 4))
+        self._update_decision_legend()
 
         table_wrap = self._frame(table_section)
         table_wrap.pack(fill="both", expand=True, padx=6, pady=(0, 6))
         table_wrap.grid_columnconfigure(0, weight=1)
         table_wrap.grid_rowconfigure(0, weight=1)
 
-        columns = ("SKU", "Name", "ProductFamily", "地区", "在库库存", "在途库存", "在产库存", "总量库存",
+        columns = ("渠道", "SKU", "Name", "ProductFamily", "地区", "在库库存", "在途库存", "在产库存", "总量库存",
                    "8-30天", "15天", "30天", "采用需求", "需求来源",
-                   "LT预估", "物流预估", "决策建议", "建议订货量", "体积系数", "备货体积", "催发货体积", "详细说明")
+                   "LT预估", "物流预估", "决策建议", "建议订货量", "体积系数", "备货体积", "催发货数量", "催发货体积", "详细说明")
         self.tree = ttk.Treeview(table_wrap, columns=columns, show="tree headings",
                                  height=12, style="ERP.Treeview")
         self.column_display_names = columns
         self.tree.heading("#0", text="产品图")
         self.tree.column("#0", width=72, stretch=False, anchor="center")
 
-        col_widths = [78, 150, 88, 50, 62, 62, 62, 62, 58, 58, 58, 68, 76, 72, 72, 82, 72, 68, 72, 76, 150]
+        col_widths = [48, 78, 150, 88, 50, 62, 62, 62, 62, 58, 58, 58, 68, 76, 72, 72, 82, 72, 68, 72, 72, 76, 150]
         for col, width in zip(columns, col_widths):
             self.tree.heading(col, text=col, command=lambda c=col: self.on_header_click(c))
             anchor = "w" if col in ("Name", "详细说明", "ProductFamily") else "center"
@@ -1253,9 +1293,12 @@ class InventoryDecisionSystem:
             except Exception:
                 pass
 
+        self._update_decision_legend()
+
         for idx, (_, row) in enumerate(df.iterrows()):
+            channel_val = row.get('渠道', self.channel.get() or '')
             values = (
-                row['Sku'], row['Name'], row['ProductFamily'], row['Region'],
+                channel_val, row['Sku'], row['Name'], row['ProductFamily'], row['Region'],
                 f"{row['在库库存']:.0f}", f"{row['在途库存']:.0f}", f"{row['在产库存']:.0f}",
                 f"{row['总量库存']:.0f}", f"{row['需求_8_30天']:.3f}", f"{row['需求_15天']:.3f}",
                 f"{row['需求_30天']:.3f}", f"{row['日均需求']:.3f}", row['需求来源'],
@@ -1263,6 +1306,7 @@ class InventoryDecisionSystem:
                 f"{row['建议订货量']:.0f}" if row['建议订货量'] > 0 else "-",
                 f"{row['PriceRadarVolume']:.5f}",
                 f"{row['备货体积']:.4f}" if row['备货体积'] > 0 else "-",
+                f"{row['催发货数量']:.0f}" if row.get('催发货数量', 0) > 0 else "-",
                 f"{row['催发货体积']:.4f}" if row['催发货体积'] > 0 else "-",
                 row['详细说明']
             )
@@ -1667,10 +1711,11 @@ class InventoryDecisionSystem:
                     return ("下单备货", order_qty, order_vol,
                            f"总库存{total:.0f}≤{lt_days}天需求({lt_need:.1f})，缺口{order_qty:.0f}，体积{order_vol:.4f}m³，基于{source}")
                 elif (in_stock + transit) <= log_need and production > 0:
-                    expedite_vol = production * price_vol
+                    expedite_qty = max(0.0, log_need - in_stock - transit)
+                    expedite_vol = expedite_qty * price_vol
                     return ("催促发货", 0, 0,
                            f"现货+在途{in_stock + transit:.0f}≤{log_days}天物流需求({log_need:.1f})，"
-                           f"需催在产{production:.0f}件尽快发货，催发货体积{expedite_vol:.4f}m³")
+                           f"需催发{expedite_qty:.0f}件(物流预估-现货-在途)，催发货体积{expedite_vol:.4f}m³")
                 else:
                     days = total / daily if daily > 0 else 0
                     if (in_stock + transit) <= log_need and production == 0:
@@ -1685,17 +1730,33 @@ class InventoryDecisionSystem:
             df['建议订货量'] = [d[1] for d in decisions]
             df['备货体积'] = [d[2] for d in decisions]
             df['详细说明'] = [d[3] for d in decisions]
+            df['催发货数量'] = 0.0
             df['催发货体积'] = 0.0
             expedite_mask = df['决策建议'] == '催促发货'
+            df.loc[expedite_mask, '催发货数量'] = (
+                (df.loc[expedite_mask, '物流预估']
+                 - df.loc[expedite_mask, '在库库存']
+                 - df.loc[expedite_mask, '在途库存']).clip(lower=0)
+            )
             df.loc[expedite_mask, '催发货体积'] = (
-                df.loc[expedite_mask, '在产库存'] * df.loc[expedite_mask, 'PriceRadarVolume']
+                df.loc[expedite_mask, '催发货数量'] * df.loc[expedite_mask, 'PriceRadarVolume']
             )
 
             priority = {"下单备货": 0, "催促发货": 1, "保持现状": 2, "暂无销售": 3}
             df['优先级'] = df['决策建议'].map(priority)
             df = df.sort_values(['优先级', 'Sku'])
+            df['渠道'] = target_channel
 
-            self.result_data = df
+            if self.accumulate_mode.get() and self.result_data is not None and len(self.result_data) > 0:
+                old = self.result_data
+                if '渠道' in old.columns:
+                    old = old[old['渠道'] != target_channel]
+                else:
+                    old = old.iloc[0:0]
+                self.result_data = pd.concat([old, df], ignore_index=True)
+            else:
+                self.result_data = df
+            df = self.result_data
             self._image_cache = {}
             self._update_image_lookup(df)
             self.sort_primary = None
@@ -1796,18 +1857,23 @@ class InventoryDecisionSystem:
         data = df if df is not None else self.result_data
         if data is None:
             return False
+        data = data.copy()
         if 'ImageUrl' not in data.columns:
-            data = data.copy()
             data['ImageUrl'] = ''
-        cols = ['Sku', 'Name', 'ProductFamily', 'Region', '在库库存', '在途库存', '在产库存', '总量库存',
+        if '渠道' not in data.columns:
+            data['渠道'] = self.channel.get() or ''
+        if '催发货数量' not in data.columns:
+            data['催发货数量'] = 0.0
+        cols = ['渠道', 'Sku', 'Name', 'ProductFamily', 'Region', '在库库存', '在途库存', '在产库存', '总量库存',
                '需求_8_30天', '需求_15天', '需求_30天', '日均需求', '需求来源',
-               'LT预估', '物流预估', '决策建议', '建议订货量', 'PriceRadarVolume', '备货体积', '催发货体积', 'ImageUrl', '详细说明']
+               'LT预估', '物流预估', '决策建议', '建议订货量', 'PriceRadarVolume', '备货体积',
+               '催发货数量', '催发货体积', 'ImageUrl', '详细说明']
 
         export_df = data[cols].copy()
-        export_df.columns = ['SKU', 'Name', 'ProductFamily', '地区', '在库库存', '在途库存', '在产库存', '总量库存',
+        export_df.columns = ['渠道', 'SKU', 'Name', 'ProductFamily', '地区', '在库库存', '在途库存', '在产库存', '总量库存',
                            '8-30天日均', '15天日均', '30天日均', '采用日均需求', '需求来源',
                            'LeadTime周期需求', '物流周期需求', '决策建议', '建议订货量', '体积系数',
-                           '备货体积(m³)', '催发货体积(m³)', 'ImageUrl', '详细说明']
+                           '备货体积(m³)', '催发货数量', '催发货体积(m³)', 'ImageUrl', '详细说明']
 
         with pd.ExcelWriter(filename, engine='openpyxl') as writer:
             export_df.to_excel(writer, index=False, sheet_name='库存决策分析')
