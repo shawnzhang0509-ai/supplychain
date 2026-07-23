@@ -220,6 +220,7 @@ FinalResult AS (
 -- 6. 输出
 -- ============================================
 SELECT
+    N'30' AS WindowType,
     Sku,
     Region,
     CheckinDate,

@@ -19,7 +19,7 @@ plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode M
 plt.rcParams['axes.unicode_minus'] = False
 
 CONFIG_FILE = "inventory_config.json"
-APP_VERSION = "4.8.2"
+APP_VERSION = "4.8.3"
 CHANNELS_SETTINGS_FILE = "channels_settings.json"
 CHANNELS_SETTINGS_TEMPLATE = "channels_settings.template.json"
 LEGACY_CHANNELS_SETTINGS_FILES = (
@@ -1509,6 +1509,74 @@ class InventoryDecisionSystem:
             print(f"Chart generation failed: {e}")
             return False
 
+    def _validate_sales_window_exports(self, sales_8_30_df, sales_15_df, sales_30_df, channel, silent=False):
+        """检查 Sales 8-30 / 15 / 30 是否疑似用同一份 SQL 导出。"""
+        warnings = []
+
+        expected = {
+            "Sales 8-30": ("8-30", sales_8_30_df),
+            "Sales 15": ("15", sales_15_df),
+            "Sales 30": ("30", sales_30_df),
+        }
+        for label, (window_type, df) in expected.items():
+            if "WindowType" not in df.columns:
+                continue
+            actual = df["WindowType"].astype(str).str.strip().str.lower().unique()
+            if len(actual) == 1 and actual[0] not in (window_type.lower(), ""):
+                warnings.append(
+                    f"{label}.csv 的 WindowType={actual[0]}，与预期 {window_type} 不符（可能导出了错误的 SQL）"
+                )
+
+        def _norm_demand(df):
+            if "AvgDailyDemand_3Checkins_Avg" not in df.columns:
+                return None
+            out = df[["Sku", "Region", "AvgDailyDemand_3Checkins_Avg"]].copy()
+            out["AvgDailyDemand_3Checkins_Avg"] = pd.to_numeric(
+                out["AvgDailyDemand_3Checkins_Avg"], errors="coerce"
+            ).round(6)
+            return out.drop_duplicates(subset=["Sku", "Region"])
+
+        s8 = _norm_demand(sales_8_30_df)
+        s30 = _norm_demand(sales_30_df)
+        if s8 is not None and s30 is not None and len(s8) > 0 and len(s30) > 0:
+            merged = pd.merge(s8, s30, on=["Sku", "Region"], how="inner", suffixes=("_8", "_30"))
+            if len(merged) > 0:
+                same_demand = merged["AvgDailyDemand_3Checkins_Avg_8"].eq(
+                    merged["AvgDailyDemand_3Checkins_Avg_30"]
+                )
+                if same_demand.all():
+                    detail = ""
+                    diag_cols = [c for c in ("SampleStart", "SampleDays", "SampleQty") if c in sales_8_30_df.columns]
+                    if diag_cols and all(c in sales_30_df.columns for c in diag_cols):
+                        key_cols = ["Sku", "Region"] + (
+                            ["CheckinDate"] if "CheckinDate" in sales_8_30_df.columns else []
+                        )
+                        left = sales_8_30_df[key_cols + diag_cols].drop_duplicates()
+                        right = sales_30_df[key_cols + diag_cols].drop_duplicates()
+                        cmp = pd.merge(left, right, on=key_cols, how="inner", suffixes=("_8", "_30"))
+                        if len(cmp) > 0:
+                            same_diag = True
+                            for col in diag_cols:
+                                if not cmp[f"{col}_8"].equals(cmp[f"{col}_30"]):
+                                    same_diag = False
+                                    break
+                            if same_diag:
+                                detail = "（SampleStart/SampleDays/SampleQty 也完全一致）"
+                    warnings.append(
+                        f"Sales 8-30.csv 与 Sales 30.csv 的日均需求完全相同{detail}，"
+                        "很可能自动出数时两份文件用了同一份 SQL，或其中一个被覆盖了。"
+                        "请分别执行 sql/sales_8_30.sql 与 sql/sales_30.sql 后重新导出。"
+                    )
+
+        if not warnings:
+            return True
+
+        msg = f"渠道 [{channel}] 销量数据校验警告：\n\n" + "\n\n".join(f"• {w}" for w in warnings)
+        print(msg)
+        if not silent:
+            messagebox.showwarning("销量数据校验", msg)
+        return False
+
     # ========== 核心分析逻辑 ==========
     def run_analysis_core(self, silent=False, auto_export=False, channel_override=None):
         try:
@@ -1588,6 +1656,10 @@ class InventoryDecisionSystem:
                     if not silent:
                         messagebox.showerror("错误", f"{name}.csv 缺少字段：AvgDailyDemand_3Checkins_Avg")
                     return False
+
+            self._validate_sales_window_exports(
+                sales_8_30_df, sales_15_df, sales_30_df, target_channel, silent=silent
+            )
 
             def _is_empty_value(val):
                 if pd.isna(val):

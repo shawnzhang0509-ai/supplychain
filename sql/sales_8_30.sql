@@ -222,6 +222,7 @@ FinalResult AS (
 -- 6. 输出（导出 CSV 时可只保留需要的列）
 -- ============================================
 SELECT
+    N'8-30' AS WindowType,
     Sku,
     Region,
     CheckinDate,
