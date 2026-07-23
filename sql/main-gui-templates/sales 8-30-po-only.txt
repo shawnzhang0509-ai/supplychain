@@ -1,23 +1,8 @@
--- ============================================================
--- Sales 15 导出 SQL（修订版）
--- 占位符：{sku} = 渠道前缀，如 918
---
--- 取样逻辑：入库后第1天 ~ 第15天（未满周期则到今天），含首尾
---   例：7/2 入库，今天 7/10 → 取样 7/3~7/10，共 8 天
---   例：7/2 入库，今天 7/23 → 已满15天，取样 7/3~7/17，共 15 天
---
--- 修订要点（与 Sales 8-30 / 30 一致）：
--- 1. 销量日期优先 PaidDateUtc（与 BI 一致）
--- 2. 入库事件去重 + 含 Transfer 调拨（排除 TransferType='Order'）
--- 3. 取样天数与销量窗口严格一致（含首尾）
--- 4. 输出 SampleStart/End/Days/Qty 便于对账
--- 5. AvgDailyDemand_3Checkins_Avg 排除未满15天的最近一次
--- ============================================================
+-- Sales 8-30（仅 PO 入库，不含 Transfer 调拨）
+-- 用于排查：若此文件能导出成功，说明问题在 Transfers 表/字段，而非整段 SQL 逻辑
+-- 占位符：{sku}
 
 WITH
--- ============================================
--- 1. 销量层
--- ============================================
 DailySales AS (
     SELECT
         CAST(COALESCE(o.PaidDateUtc, o.DateCreatedUtc) AS DATE) AS OrderDate,
@@ -59,9 +44,6 @@ DailySales AS (
         END
 ),
 
--- ============================================
--- 2. 补货事件层
--- ============================================
 RestockEvents_Raw AS (
     SELECT
         p.Sku,
@@ -70,87 +52,61 @@ RestockEvents_Raw AS (
             WHEN c.ShippedtoportId = '646a2216-87c2-4bc6-8469-fdbd90bb2d84' THEN N'北岛'
             ELSE N'北岛'
         END AS Region,
-        CAST(c.ActualArrivingDate AS DATE) AS RestockDate,
-        c.ContainerNumber AS ReferenceNumber,
-        CAST(po.PurchaseOrderCode AS NVARCHAR(50)) AS ReferenceCode,
-        N'PO_Arrival' AS SourceType
+        CAST(c.ActualArrivingDate AS DATE) AS CheckinDate,
+        c.ContainerNumber,
+        po.PurchaseOrderCode,
+        N'PO' AS SourceType
     FROM PurchaseOrders po
     JOIN PurchaseOrderLines pol ON pol.PurchaseOrderId = po.Id
     JOIN Products p ON pol.ProductId = p.Id
     LEFT JOIN Containers c ON c.PurchaseOrderId = po.Id
     WHERE p.Sku LIKE '{sku}%'
       AND c.ActualArrivingDate IS NOT NULL
-
-    UNION ALL
-
-    SELECT
-        p.Sku,
-        N'南岛' AS Region,
-        CAST(t.CompletedOnUtc AS DATE) AS RestockDate,
-        CAST(t.Id AS NVARCHAR(50)) AS ReferenceNumber,
-        CAST(t.TransferType AS NVARCHAR(50)) AS ReferenceCode,
-        N'Transfer_From_North' AS SourceType
-    FROM dbo.Transfers t
-    JOIN dbo.Products p ON t.ProductId = p.Id
-    LEFT JOIN dbo.Warehouses w_source ON t.SourceWarehouseId = w_source.Id
-    LEFT JOIN dbo.Warehouses w_target ON t.TargetWarehouseId = w_target.Id
-    WHERE w_target.Name = 'CHCH Gerald Connelly'
-      AND w_source.Name = 'CHCH in transit'
-      AND t.TransferJobStatus = 'Completed'
-      AND p.Sku LIKE '{sku}%'
-      AND CASE WHEN t.TransferType = 'Order' THEN 0 ELSE 1 END = 1
 ),
 
--- 同一天同地区多次到港合并为一次补货事件
 RestockEvents AS (
     SELECT
         Sku,
         Region,
-        RestockDate,
-        MAX(ReferenceNumber) AS ReferenceNumber,
-        MAX(ReferenceCode) AS ReferenceCode,
+        CheckinDate,
+        MAX(ContainerNumber) AS ContainerNumber,
+        MAX(CAST(PurchaseOrderCode AS NVARCHAR(50))) AS PurchaseOrderCode,
         MAX(SourceType) AS SourceType
     FROM RestockEvents_Raw
-    GROUP BY Sku, Region, RestockDate
+    GROUP BY Sku, Region, CheckinDate
 ),
 
 RestockEvents_Ranked AS (
     SELECT
         *,
-        ROW_NUMBER() OVER (PARTITION BY Sku, Region ORDER BY RestockDate DESC) AS rn
+        ROW_NUMBER() OVER (PARTITION BY Sku, Region ORDER BY CheckinDate DESC) AS rn
     FROM RestockEvents
 ),
 
--- ============================================
--- 3. 取样窗口：入库后第1天 ~ 第15天（未满则到今天）
--- ============================================
 CheckinWindows AS (
     SELECT
-        re.Sku,
-        re.Region,
-        re.RestockDate AS CheckinDate,
-        re.ReferenceNumber AS ContainerNumber,
-        re.ReferenceCode AS PurchaseOrderCode,
-        re.SourceType,
-        re.rn,
-        DATEADD(day, 1, re.RestockDate) AS SampleStart,
+        ck.Sku,
+        ck.Region,
+        ck.CheckinDate,
+        ck.ContainerNumber,
+        ck.PurchaseOrderCode,
+        ck.SourceType,
+        ck.rn,
+        DATEADD(day, 8, ck.CheckinDate) AS SampleStart,
         CASE
-            WHEN CAST(GETDATE() AS DATE) BETWEEN DATEADD(day, 1, re.RestockDate) AND DATEADD(day, 14, re.RestockDate)
+            WHEN CAST(GETDATE() AS DATE) BETWEEN DATEADD(day, 1, ck.CheckinDate) AND DATEADD(day, 29, ck.CheckinDate)
                 THEN CAST(GETDATE() AS DATE)
-            ELSE DATEADD(day, 15, re.RestockDate)
+            ELSE DATEADD(day, 30, ck.CheckinDate)
         END AS SampleEnd,
         CASE
-            WHEN re.rn = 1
-                 AND CAST(GETDATE() AS DATE) BETWEEN DATEADD(day, 1, re.RestockDate) AND DATEADD(day, 14, re.RestockDate)
+            WHEN ck.rn = 1
+                 AND CAST(GETDATE() AS DATE) BETWEEN DATEADD(day, 1, ck.CheckinDate) AND DATEADD(day, 29, ck.CheckinDate)
                 THEN 1 ELSE 0
         END AS IsPartialPeriod
-    FROM RestockEvents_Ranked re
-    WHERE re.rn BETWEEN 1 AND 3
+    FROM RestockEvents_Ranked ck
+    WHERE ck.rn BETWEEN 1 AND 3
 ),
 
--- ============================================
--- 4. 单次表现层
--- ============================================
 SingleCheckinPerformance AS (
     SELECT
         cw.Sku,
@@ -163,15 +119,12 @@ SingleCheckinPerformance AS (
         cw.SampleStart,
         cw.SampleEnd,
         cw.IsPartialPeriod,
-
         CASE
             WHEN cw.SampleEnd BETWEEN '1900-01-01' AND DATEADD(day, -1, cw.SampleStart) THEN 0
             ELSE DATEDIFF(day, cw.SampleStart, cw.SampleEnd) + 1
         END AS SampleDays,
-
         ISNULL(SUM(ds.DailyQty), 0) AS SampleQty,
         COUNT(DISTINCT CASE WHEN ds.DailyQty BETWEEN 1 AND 999999 THEN ds.OrderDate END) AS DaysWithSales,
-
         CAST(
             ISNULL(SUM(ds.DailyQty), 0) * 1.0
             / NULLIF(
@@ -182,7 +135,6 @@ SingleCheckinPerformance AS (
                 0
             )
         AS DECIMAL(18, 6)) AS SingleAvg_Daily
-
     FROM CheckinWindows cw
     LEFT JOIN DailySales ds
         ON cw.Sku = ds.Sku
@@ -193,51 +145,29 @@ SingleCheckinPerformance AS (
         cw.SourceType, cw.rn, cw.SampleStart, cw.SampleEnd, cw.IsPartialPeriod
 ),
 
--- ============================================
--- 5. 最终聚合层
--- ============================================
 FinalResult AS (
     SELECT
         scp.*,
-
         AVG(
             CASE
                 WHEN scp.rn = 1 AND scp.IsPartialPeriod = 1 THEN NULL
                 ELSE scp.SingleAvg_Daily
             END
-        ) OVER (PARTITION BY scp.Sku, scp.Region) AS AvgDailyDemand_3Checkins_Avg,
-
-        AVG(scp.SingleAvg_Daily) OVER (PARTITION BY scp.Sku, scp.Region) AS AvgDailyDemand_3Checkins_Avg_All,
-
-        CAST(
-            SUM(scp.SampleQty) OVER (PARTITION BY scp.Sku, scp.Region) * 1.0
-            / NULLIF(SUM(scp.SampleDays) OVER (PARTITION BY scp.Sku, scp.Region), 0)
-        AS DECIMAL(18, 6)) AS AvgDailyDemand_Weighted
-
+        ) OVER (PARTITION BY scp.Sku, scp.Region) AS AvgDailyDemand_3Checkins_Avg
     FROM SingleCheckinPerformance scp
 )
 
--- ============================================
--- 6. 输出
--- ============================================
 SELECT
-    N'15' AS WindowType,
+    N'8-30' AS WindowType,
     Sku,
     Region,
     CheckinDate,
     ContainerNumber,
     PurchaseOrderCode,
-    SourceType,
-    rn AS CheckinRank,
-    IsPartialPeriod,
-    SampleStart,
-    SampleEnd,
-    SampleDays,
-    SampleQty,
-    DaysWithSales,
     SingleAvg_Daily,
     AvgDailyDemand_3Checkins_Avg,
-    AvgDailyDemand_3Checkins_Avg_All,
-    AvgDailyDemand_Weighted
+    SampleStart,
+    SampleEnd,
+    SampleDays
 FROM FinalResult
 ORDER BY Sku, Region, CheckinDate DESC;
