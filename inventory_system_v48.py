@@ -21,6 +21,10 @@ plt.rcParams['axes.unicode_minus'] = False
 CONFIG_FILE = "inventory_config.json"
 CHANNELS_SETTINGS_FILE = "channels_settings.json"
 CHANNELS_SETTINGS_TEMPLATE = "channels_settings.template.json"
+LEGACY_CHANNELS_SETTINGS_FILES = (
+    "channel_settings.template.json",
+    CHANNELS_SETTINGS_TEMPLATE,
+)
 DEFAULT_LEAD_TIME = 90
 DEFAULT_LOGISTICS_TIME = 30
 CONTAINER_THRESHOLD = 69.0
@@ -255,6 +259,79 @@ class InventoryDecisionSystem:
         data_dir = data_dir or self.data_dir.get()
         return os.path.join(data_dir, CHANNELS_SETTINGS_FILE)
 
+    def _legacy_settings_paths(self, data_dir=None):
+        data_dir = data_dir or self.data_dir.get()
+        return [
+            os.path.join(data_dir, name)
+            for name in LEGACY_CHANNELS_SETTINGS_FILES
+        ]
+
+    def _parse_channels_settings_payload(self, loaded, document=None):
+        document = document or {
+            "_说明": "",
+            "default": self._default_channel_settings(),
+            "channels": {},
+        }
+        if not isinstance(loaded, dict):
+            return document
+        if isinstance(loaded.get("default"), dict):
+            document["default"] = self._normalize_channel_entry(
+                loaded["default"], self._default_channel_settings()
+            )
+        if isinstance(loaded.get("channels"), dict):
+            document["channels"] = {
+                str(name): self._normalize_channel_entry(entry, document["default"])
+                for name, entry in loaded["channels"].items()
+                if not str(name).startswith("_")
+            }
+        elif "LeadTime" in loaded or "LogisticsTime" in loaded:
+            document["default"] = self._normalize_channel_entry(loaded, document["default"])
+        if loaded.get("_说明"):
+            document["_说明"] = str(loaded["_说明"])
+        return document
+
+    def _read_channels_settings_file(self, path):
+        with open(path, "r", encoding="utf-8") as handle:
+            loaded = json.load(handle)
+        return self._parse_channels_settings_payload(loaded)
+
+    def migrate_channels_settings(self, data_dir=None):
+        data_dir = data_dir or self.data_dir.get()
+        if not data_dir or not os.path.exists(data_dir):
+            return None, None
+        primary = self._channels_settings_path(data_dir)
+        candidates = []
+        if os.path.exists(primary):
+            candidates.append((primary, os.path.getmtime(primary)))
+        for path in self._legacy_settings_paths(data_dir):
+            if not os.path.exists(path):
+                continue
+            try:
+                with open(path, "r", encoding="utf-8") as handle:
+                    loaded = json.load(handle)
+                if isinstance(loaded, dict) and isinstance(loaded.get("channels"), dict):
+                    candidates.append((path, os.path.getmtime(path)))
+            except Exception:
+                continue
+        if not candidates:
+            return None, None
+        newest_path, _ = max(candidates, key=lambda item: item[1])
+        try:
+            document = self._read_channels_settings_file(newest_path)
+        except Exception:
+            return None, None
+        channels = self._list_channel_folders(data_dir)
+        default = document["default"]
+        document["channels"] = {
+            channel: self._normalize_channel_entry(document["channels"].get(channel), default)
+            for channel in channels
+        }
+        self._save_channels_settings_document(document, data_dir)
+        source_name = os.path.basename(newest_path)
+        if newest_path != primary:
+            return primary, source_name
+        return primary, CHANNELS_SETTINGS_FILE
+
     def _default_channel_settings(self):
         return {
             "LeadTime": DEFAULT_LEAD_TIME,
@@ -292,29 +369,16 @@ class InventoryDecisionSystem:
             "default": self._default_channel_settings(),
             "channels": {},
         }
+        if not data_dir:
+            return document
+        self.migrate_channels_settings(data_dir)
         path = self._channels_settings_path(data_dir)
         if not os.path.exists(path):
             return document
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                loaded = json.load(f)
-            if isinstance(loaded.get("default"), dict):
-                document["default"] = self._normalize_channel_entry(
-                    loaded["default"], self._default_channel_settings()
-                )
-            if isinstance(loaded.get("channels"), dict):
-                document["channels"] = {
-                    str(name): self._normalize_channel_entry(
-                        entry, document["default"]
-                    )
-                    for name, entry in loaded["channels"].items()
-                    if not str(name).startswith("_")
-                }
-            if loaded.get("_说明"):
-                document["_说明"] = str(loaded["_说明"])
+            return self._read_channels_settings_file(path)
         except Exception:
-            pass
-        return document
+            return document
 
     def _save_channels_settings_document(self, document, data_dir=None):
         data_dir = data_dir or self.data_dir.get()
@@ -438,6 +502,7 @@ class InventoryDecisionSystem:
     def on_channel_changed(self):
         channel = self.channel.get()
         if channel:
+            self.migrate_channels_settings()
             self.apply_channel_settings(channel)
         self.update_file_status()
 
@@ -871,19 +936,27 @@ class InventoryDecisionSystem:
             if not exists: all_ready = False
         settings = self.load_channel_settings(ch)
         settings_path = self._channels_settings_path(dir_path)
-        source = self.get_channel_settings_source(ch)
-        if os.path.exists(settings_path):
-            if source == CHANNELS_SETTINGS_FILE:
+        migrated_path, migrated_from = self.migrate_channels_settings(dir_path)
+        if migrated_path and os.path.exists(migrated_path):
+            settings = self.load_channel_settings(ch)
+            if migrated_from and migrated_from != CHANNELS_SETTINGS_FILE:
+                status_lines.append(
+                    f"✓ 已从 {migrated_from} 生成 {CHANNELS_SETTINGS_FILE} · "
+                    f"[{ch}] LT {settings['LeadTime']} / 物流 {settings['LogisticsTime']}"
+                )
+            elif ch in self._load_channels_settings_document(dir_path).get("channels", {}):
                 status_lines.append(
                     f"✓ {CHANNELS_SETTINGS_FILE} · [{ch}] LT {settings['LeadTime']} / 物流 {settings['LogisticsTime']}"
                 )
             else:
                 status_lines.append(
-                    f"○ {CHANNELS_SETTINGS_FILE} 已存在，但 [{ch}] 使用 default · LT {settings['LeadTime']} / 物流 {settings['LogisticsTime']}"
+                    f"○ {CHANNELS_SETTINGS_FILE} 已存在，但 [{ch}] 未单独配置 · "
+                    f"使用 default LT {settings['LeadTime']} / 物流 {settings['LogisticsTime']}"
                 )
         else:
             status_lines.append(
-                f"○ 未找到 {CHANNELS_SETTINGS_FILE}，[{ch}] 使用默认 LT {settings['LeadTime']} / 物流 {settings['LogisticsTime']}"
+                f"○ 未找到 {CHANNELS_SETTINGS_FILE}（请点「更新渠道配置」生成；不要只改 template 文件）· "
+                f"[{ch}] 默认 LT {settings['LeadTime']} / 物流 {settings['LogisticsTime']}"
             )
         self._set_label(self.file_status_label, "  |  ".join(status_lines),
                         "#16A34A" if all_ready else "#DC2626")
